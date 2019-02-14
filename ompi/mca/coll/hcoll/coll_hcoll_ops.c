@@ -397,7 +397,7 @@ int mca_coll_hcoll_gatherv(const void* sbuf, int scount,
 
 }
 
-int mca_coll_hcoll_scatterv(const void* sbuf, int *scounts, const int *displs,
+int mca_coll_hcoll_scatterv(const void* sbuf, const int *scounts, const int *displs,
                             struct ompi_datatype_t *sdtype,
                             void* rbuf, int rcount,
                             struct ompi_datatype_t *rdtype,
