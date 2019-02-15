@@ -416,12 +416,12 @@ int mca_coll_hcoll_scatterv(const void* sbuf, const int *scounts, const int *dis
         /*If we are here then datatype is not simple predefined datatype */
         /*In future we need to add more complex mapping to the dte_data_representation_t */
         /* Now use fallback */
-        HCOL_VERBOSE(20,"Ompi_datatype is not supported: sdtype = %s, rdtype = %s; calling fallback gatherv;",
+        HCOL_VERBOSE(20,"Ompi_datatype is not supported: sdtype = %s, rdtype = %s; calling fallback scatterv;",
                      sdtype->super.name,
                      rdtype->super.name);
         rc = hcoll_module->previous_scatterv(sbuf, scounts, displs, sdtype,
                                            rbuf, rcount, rdtype, root,
-                                           comm, hcoll_module->previous_gatherv_module);
+                                           comm, hcoll_module->previous_scatterv_module);
         return rc;
     }
     rc = hcoll_collectives.coll_scatterv((void *)sbuf, (int *)scounts, (int *)displs, stype, rbuf, rcount, rtype, root, hcoll_module->hcoll_context);
@@ -429,7 +429,7 @@ int mca_coll_hcoll_scatterv(const void* sbuf, const int *scounts, const int *dis
         HCOL_VERBOSE(20,"RUNNING FALLBACK SCATTERV");
         rc = hcoll_module->previous_scatterv(sbuf, scounts, displs, sdtype,
                                            rbuf, rcount, rdtype, root,
-                                           comm, hcoll_module->previous_gatherv_module);
+                                           comm, hcoll_module->previous_scatterv_module);
     }
     return rc;
 }
