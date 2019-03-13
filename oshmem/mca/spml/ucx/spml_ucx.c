@@ -242,7 +242,7 @@ int mca_spml_ucx_add_procs(ompi_proc_t** procs, size_t nprocs)
         goto error;
     }
 
-    opal_progress_register(spml_ucx_progress);
+    opal_progress_register(spml_ucx_default_progress);
 
     mca_spml_ucx.remote_addrs_tbl = (char **)calloc(nprocs, sizeof(char *));
     memset(mca_spml_ucx.remote_addrs_tbl, 0, nprocs * sizeof(char *));
@@ -515,14 +515,11 @@ static inline void _ctx_add(mca_spml_ucx_ctx_array_t *array, mca_spml_ucx_ctx_t 
     int i;
 
     if (array->ctxs_count < array->ctxs_num) {
-        for (i = 0; i < array->ctxs_num; i++) {
-            if (array->ctxs[i] == NULL) {
-                array->ctxs[i] = ctx;
-                break;
-            }
-        }
-    } else {
+        array->ctxs[array->ctxs_count] = ctx;
+    }
+    else {
         array->ctxs = realloc(array->ctxs, (array->ctxs_num + 8) * sizeof(mca_spml_ucx_ctx_t *));
+        opal_atomic_wmb ();
         for (i = array->ctxs_num; i < array->ctxs_num + 8; i++) {
             array->ctxs[i] = NULL;
         }
@@ -530,6 +527,7 @@ static inline void _ctx_add(mca_spml_ucx_ctx_array_t *array, mca_spml_ucx_ctx_t 
         array->ctxs_num += 8;
     }
 
+    opal_atomic_wmb ();
     array->ctxs_count++;
 }
 
@@ -537,14 +535,16 @@ static inline void _ctx_remove(mca_spml_ucx_ctx_array_t *array, mca_spml_ucx_ctx
 {
     int i;
 
-    for (i = 0; i < array->ctxs_num; i++) {
+    for (i = 0; i < array->ctxs_count; i++) {
         if (array->ctxs[i] == ctx) {
-            array->ctxs[i] = NULL;
+            array->ctxs[i] = array->ctxs[array->ctxs_count-1];
+            array->ctxs[array->ctxs_count-1] = NULL;
             break;
         }
     }
 
     array->ctxs_count--;
+    opal_atomic_wmb ();
 }
 
 int mca_spml_ucx_ctx_create(long options, shmem_ctx_t *ctx)
@@ -582,6 +582,10 @@ int mca_spml_ucx_ctx_create(long options, shmem_ctx_t *ctx)
         goto error;
     }
 
+    if (mca_spml_ucx.active_array.ctxs_count == 0) {
+        opal_progress_register(spml_ucx_ctx_progress);
+    }
+
     for (i = 0; i < nprocs; i++) {
         ep_params.field_mask = UCP_EP_PARAM_FIELD_REMOTE_ADDRESS;
         ep_params.address    = (ucp_address_t *)(mca_spml_ucx.remote_addrs_tbl[i]);
@@ -612,7 +616,6 @@ int mca_spml_ucx_ctx_create(long options, shmem_ctx_t *ctx)
     SHMEM_MUTEX_UNLOCK(mca_spml_ucx.internal_mutex);
 
     (*ctx) = (shmem_ctx_t)ucx_ctx;
-
     return OSHMEM_SUCCESS;
 
  error2:
@@ -641,6 +644,10 @@ void mca_spml_ucx_ctx_destroy(shmem_ctx_t ctx)
     _ctx_remove(&mca_spml_ucx.active_array, (mca_spml_ucx_ctx_t *)ctx);
     _ctx_add(&mca_spml_ucx.idle_array, (mca_spml_ucx_ctx_t *)ctx);
     SHMEM_MUTEX_UNLOCK(mca_spml_ucx.internal_mutex);
+
+    if (!mca_spml_ucx.active_array.ctxs_count) {
+        opal_progress_unregister(spml_ucx_ctx_progress);
+    }
 }
 
 int mca_spml_ucx_get(shmem_ctx_t ctx, void *src_addr, size_t size, void *dst_addr, int src)

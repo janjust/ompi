@@ -152,7 +152,8 @@ extern int mca_spml_ucx_add_procs(ompi_proc_t** procs, size_t nprocs);
 extern int mca_spml_ucx_del_procs(ompi_proc_t** procs, size_t nprocs);
 extern int mca_spml_ucx_fence(shmem_ctx_t ctx);
 extern int mca_spml_ucx_quiet(shmem_ctx_t ctx);
-extern int spml_ucx_progress(void);
+extern int spml_ucx_default_progress(void);
+extern int spml_ucx_ctx_progress(void);
 
 static void mca_spml_ucx_cache_mkey(mca_spml_ucx_ctx_t *ucx_ctx, sshmem_mkey_t *mkey, uint32_t segno, int dst_pe)
 {
