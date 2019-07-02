@@ -24,15 +24,15 @@
 opal_mutex_t mca_osc_service_mutex = OPAL_MUTEX_STATIC_INIT;
 static void _osc_ucx_init_lock(void)
 {
-        if(mca_osc_ucx_component.enable_mpi_threads) {
-                    opal_mutex_lock(&mca_osc_service_mutex);
-                        }
+    if(mca_osc_ucx_component.enable_mpi_threads) {
+        opal_mutex_lock(&mca_osc_service_mutex);
+    }
 }
 static void _osc_ucx_init_unlock(void)
 {
-        if(mca_osc_ucx_component.enable_mpi_threads) {
-                    opal_mutex_unlock(&mca_osc_service_mutex);
-                        }
+    if(mca_osc_ucx_component.enable_mpi_threads) {
+        opal_mutex_unlock(&mca_osc_service_mutex);
+    }
 }
 
 static int component_open(void);
@@ -349,7 +349,7 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
                                     UCP_PARAM_FIELD_REQUEST_INIT |
                                     UCP_PARAM_FIELD_REQUEST_SIZE;
         context_params.features = UCP_FEATURE_RMA | UCP_FEATURE_AMO32 | UCP_FEATURE_AMO64;
-        context_params.mt_workers_shared = 0;
+        context_params.mt_workers_shared = 1;
         context_params.estimated_num_eps = ompi_proc_world_size();
         context_params.request_init = internal_req_init;
         context_params.request_size = sizeof(ompi_osc_ucx_internal_request_t);
