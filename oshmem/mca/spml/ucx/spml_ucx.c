@@ -698,6 +698,11 @@ int mca_spml_ucx_ctx_create(long options, shmem_ctx_t *ctx)
         opal_progress_register(spml_ucx_ctx_progress);
     }
 
+    if (options & SHMEM_CTX_PRIVATE) {
+        (*ctx) = (shmem_ctx_t)ucx_ctx;
+        return OSHMEM_SUCCESS;
+    }
+
     SHMEM_MUTEX_LOCK(mca_spml_ucx.internal_mutex);
     _ctx_add(&mca_spml_ucx.active_array, ucx_ctx);
     SHMEM_MUTEX_UNLOCK(mca_spml_ucx.internal_mutex);
@@ -711,7 +716,9 @@ void mca_spml_ucx_ctx_destroy(shmem_ctx_t ctx)
     MCA_SPML_CALL(quiet(ctx));
 
     SHMEM_MUTEX_LOCK(mca_spml_ucx.internal_mutex);
-    _ctx_remove(&mca_spml_ucx.active_array, (mca_spml_ucx_ctx_t *)ctx);
+    if (!(((mca_spml_ucx_ctx_t *)ctx)->options & SHMEM_CTX_PRIVATE)) {
+        _ctx_remove(&mca_spml_ucx.active_array, (mca_spml_ucx_ctx_t *)ctx);
+    }
     _ctx_add(&mca_spml_ucx.idle_array, (mca_spml_ucx_ctx_t *)ctx);
     SHMEM_MUTEX_UNLOCK(mca_spml_ucx.internal_mutex);
 
