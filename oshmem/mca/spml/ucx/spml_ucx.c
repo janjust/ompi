@@ -765,6 +765,7 @@ int mca_spml_ucx_get(shmem_ctx_t ctx, void *src_addr, size_t size, void *dst_add
 
 int mca_spml_ucx_get_nb(shmem_ctx_t ctx, void *src_addr, size_t size, void *dst_addr, int src, void **handle)
 {
+    unsigned int i;
     void *rva;
     ucs_status_t status;
     spml_ucx_mkey_t *ucx_mkey;
@@ -773,6 +774,15 @@ int mca_spml_ucx_get_nb(shmem_ctx_t ctx, void *src_addr, size_t size, void *dst_
     ucx_mkey = mca_spml_ucx_get_mkey(ctx, src, src_addr, &rva, &mca_spml_ucx);
     status = ucp_get_nbi(ucx_ctx->ucp_peers[src].ucp_conn, dst_addr, size,
                      (uint64_t)rva, ucx_mkey->rkey);
+
+    if (++ucx_ctx->nb_progress_cnt > mca_spml_ucx.nb_get_progress_thresh) {
+        for (i = 0; i < mca_spml_ucx.nb_ucp_worker_progress; i++) {
+            if (!ucp_worker_progress(ucx_ctx->ucp_worker)) {
+                ucx_ctx->nb_progress_cnt = 0;
+                break;
+            }
+        }
+    }
 
     return ucx_status_to_oshmem_nb(status);
 }
@@ -809,6 +819,7 @@ int mca_spml_ucx_put(shmem_ctx_t ctx, void* dst_addr, size_t size, void* src_add
 
 int mca_spml_ucx_put_nb(shmem_ctx_t ctx, void* dst_addr, size_t size, void* src_addr, int dst, void **handle)
 {
+    unsigned int i;
     void *rva;
     ucs_status_t status;
     spml_ucx_mkey_t *ucx_mkey;
@@ -820,6 +831,15 @@ int mca_spml_ucx_put_nb(shmem_ctx_t ctx, void* dst_addr, size_t size, void* src_
 
     if (OPAL_LIKELY(status >= 0)) {
         mca_spml_ucx_remote_op_posted(ucx_ctx, dst);
+    }
+
+    if (++ucx_ctx->nb_progress_cnt > mca_spml_ucx.nb_put_progress_thresh) {
+        for (i = 0; i < mca_spml_ucx.nb_ucp_worker_progress; i++) {
+            if (!ucp_worker_progress(ucx_ctx->ucp_worker)) {
+                ucx_ctx->nb_progress_cnt = 0;
+                break;
+            }
+        }
     }
 
     return ucx_status_to_oshmem_nb(status);
@@ -882,6 +902,8 @@ int mca_spml_ucx_quiet(shmem_ctx_t ctx)
             opal_progress();
         }
     }
+                
+    ucx_ctx->nb_progress_cnt = 0;
 
     return OSHMEM_SUCCESS;
 }
