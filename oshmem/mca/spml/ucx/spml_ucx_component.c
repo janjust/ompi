@@ -60,6 +60,20 @@ mca_spml_base_component_2_0_0_t mca_spml_ucx_component = {
     .spmlm_finalize                    = mca_spml_ucx_component_fini
 };
 
+static inline void mca_spml_ucx_param_register_ulong(const char* param_name,
+                                                    unsigned long default_value,
+                                                    const char *help_msg,
+                                                    unsigned long *storage)
+{
+    *storage = default_value;
+    (void) mca_base_component_var_register(&mca_spml_ucx_component.spmlm_version,
+                                           param_name,
+                                           help_msg,
+                                           MCA_BASE_VAR_TYPE_UNSIGNED_LONG, NULL, 0, 0,
+                                           OPAL_INFO_LVL_9,
+                                           MCA_BASE_VAR_SCOPE_READONLY,
+                                           storage);
+}
 
 static inline void mca_spml_ucx_param_register_int(const char* param_name,
                                                     int default_value,
@@ -131,6 +145,14 @@ static int mca_spml_ucx_component_register(void)
     mca_spml_ucx_param_register_bool("synchronized_quiet", 0,
                                      "Use synchronized quiet on shmem_quiet or shmem_barrier_all operations",
                                      &mca_spml_ucx.synchronized_quiet);
+
+    mca_spml_ucx_param_register_ulong("nb_put_progress_thresh", 4096,
+                                    "Number of put_nb operations before ucx progress is triggered",  &mca_spml_ucx.nb_put_progress_thresh);
+    mca_spml_ucx_param_register_ulong("nb_get_progress_thresh", 512,
+                                    "Number of get_nb operations before ucx progress is triggered",  &mca_spml_ucx.nb_get_progress_thresh);
+
+    mca_spml_ucx_param_register_ulong("nb_ucp_worker_progress", 32,
+                                    "Number of ucx worker progress calls when triggered during nbi operations",  &mca_spml_ucx.nb_ucp_worker_progress);
 
     opal_common_ucx_mca_var_register(&mca_spml_ucx_component.spmlm_version);
 
