@@ -27,7 +27,7 @@ int oshmem_shmem_allgather(void *send_buf, void *rcv_buf, int elem_size)
 }
 
 int oshmem_shmem_allgatherv(void *send_buf, void* rcv_buf, int send_count,
-                            int* rcv_size, int* displs)
+                            int *rcv_size, int* displs)
 {
     int rc;
 
