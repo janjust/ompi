@@ -102,8 +102,9 @@ int mca_spml_ucx_enable(bool enable)
 int mca_spml_ucx_del_procs(ompi_proc_t** procs, size_t nprocs)
 {
     opal_common_ucx_del_proc_t *del_procs;
-    size_t i;
+    size_t i, w, n;
     int ret;
+    int ucp_workers = mca_spml_ucx.ucp_workers;
 
     oshmem_shmem_barrier();
 
@@ -129,7 +130,20 @@ int mca_spml_ucx_del_procs(ompi_proc_t** procs, size_t nprocs)
                                             mca_spml_ucx_ctx_default.ucp_worker[0]);
     /* No need to barrier here - barrier is called in _shmem_finalize */
     free(del_procs);
-    free(mca_spml_ucx.remote_addrs_tbl);
+    if (mca_spml_ucx.remote_addrs_tbl) {
+        for (w = 0; w < ucp_workers; w++) {
+            if (mca_spml_ucx.remote_addrs_tbl[w]) {
+                for (n = 0; n < nprocs; n++) {
+                    if (mca_spml_ucx.remote_addrs_tbl[w][n]) {
+                        free(mca_spml_ucx.remote_addrs_tbl[w][n]);
+                    }
+                }
+                free(mca_spml_ucx.remote_addrs_tbl[w]);
+            }
+        }
+        free(mca_spml_ucx.remote_addrs_tbl);
+    }
+
     free(mca_spml_ucx_ctx_default.ucp_peers);
 
     mca_spml_ucx_ctx_default.ucp_peers = NULL;
@@ -181,22 +195,14 @@ static int oshmem_shmem_xchng(
         goto err;
     }
 
-//     for (i = 0; i < ucp_workers * nprocs; i++) {
-//         printf ("rcv_sizes[%d] = %u\n ", i, rcv_sizes[i]);
-//     }
-
     /* calculate displacements */
     rcv_offsets[0] = 0;
-//     printf ("rcv_offsets[%d] = %d\n ", 0, rcv_offsets[0]);
     for (i = 1; i < ucp_workers * nprocs; i++) {
         rcv_offsets[i] = rcv_offsets[i - 1] + rcv_sizes[i - 1];
-//         printf ("rcv_offsets[%d] = %d\n ", i, rcv_offsets[i]);
     }
 
     rcv_buf = malloc(rcv_offsets[(ucp_workers * nprocs) - 1]
                         + rcv_sizes[(ucp_workers * nprocs) - 1]);
-//     printf ("rcv_buf size = %u\n", rcv_offsets[(ucp_workers * nprocs) - 1]
-//                         + rcv_sizes[(ucp_workers * nprocs) - 1]);
     if (NULL == rcv_buf) {
         goto err;
     }
@@ -205,7 +211,6 @@ static int oshmem_shmem_xchng(
     for (i = 0; i < ucp_workers; i++) {
         _local_size += local_size[i];
     }
-//     printf (" _local_size = %d\n", _local_size);
     _rcv_offsets = calloc(nprocs, sizeof(*rcv_offsets));
     _rcv_sizes = calloc(nprocs, sizeof(*rcv_sizes));
 
@@ -214,14 +219,11 @@ static int oshmem_shmem_xchng(
         for (j = 0; j < ucp_workers; j++, k++) {
             _rcv_sizes[i] += rcv_sizes[k];
         }
-//         printf ("_rcv_sizes[%d] = %u\n", i, _rcv_sizes[i]);
     }
 
     _rcv_offsets[0] = 0;
-//         printf ("_rcv_offsets[%d] = %d\n ", 0, _rcv_offsets[0]);
     for (i = 1; i < nprocs; i++) {
         _rcv_offsets[i] = _rcv_offsets[i - 1] + _rcv_sizes[i - 1];
-//         printf ("_rcv_offsets[%d] = %d\n ", i, _rcv_offsets[i]);
     }
 
     char *_local_data = calloc(_local_size, 1);
@@ -230,19 +232,11 @@ static int oshmem_shmem_xchng(
         memcpy((char *) (_local_data+new_offset), (char *)local_data[i], local_size[i]);
         new_offset += local_size[i];
     }
-//     dump_address("\nnew _local_data: ", 0, (char *)_local_data, _rcv_sizes[0]);
-//     
-//     dump_address("\nxchng before agv", 0, (char *)local_data[0], local_size[0]);
-//     dump_address("\nxchng before agv", 1, (char *)local_data[1], local_size[1]);
+
     rc = oshmem_shmem_allgatherv(_local_data, rcv_buf, _local_size, _rcv_sizes, _rcv_offsets);
     if (MPI_SUCCESS != rc) {
         goto err;
     }
-//     dump_address("\nxchng after agv", 0, (char *)rcv_buf + _rcv_offsets[0], _rcv_sizes[0]);
-//     dump_address("\nxchng after agv", 1, (char *)rcv_buf + _rcv_offsets[1], _rcv_sizes[1]);
-//     for (i = 0; i < ucp_workers * nprocs; i++) {
-//         printf ("<< rcv_sizes[%d] = %d\n", i, rcv_sizes[i]);
-//     }
 
     free (_local_data);
     free (_rcv_sizes);
@@ -301,10 +295,10 @@ int mca_spml_ucx_clear_put_op_mask(mca_spml_ucx_ctx_t *ctx)
 
 int mca_spml_ucx_add_procs(ompi_proc_t** procs, size_t nprocs)
 {
-//     printf ("enter %s\n", __FUNCTION__);
-    size_t i, j, k, n;
+    size_t i, j, k, w, n;
     int rc = OSHMEM_ERROR;
     int my_rank = oshmem_my_proc_id();
+    int ucp_workers = mca_spml_ucx.ucp_workers;
     ucs_status_t err;
     ucp_address_t **wk_local_addr;
     unsigned int *wk_addr_len;
@@ -325,7 +319,7 @@ int mca_spml_ucx_add_procs(ompi_proc_t** procs, size_t nprocs)
     if (OSHMEM_SUCCESS != rc) {
         goto error;
     }
-//     printf ("me = %d[%d] @ %s\n", my_rank, pthread_self(), __FUNCTION__);
+
     for (i = 0; i < mca_spml_ucx.ucp_workers; i++) {
         size_t tmp_len;
         err = ucp_worker_get_address(mca_spml_ucx_ctx_default.ucp_worker[i], &wk_local_addr[i], &tmp_len);
@@ -333,8 +327,6 @@ int mca_spml_ucx_add_procs(ompi_proc_t** procs, size_t nprocs)
         if (err != UCS_OK) {
             goto error;
         }
-//         dump_address("\nget address of worker", i, (char *)wk_local_addr[i], wk_addr_len[i]);
-//         printf ("wk_addr_len[%d] = %d\n", i, wk_addr_len[i]);
     }
 
     rc = oshmem_shmem_xchng((void **)wk_local_addr, wk_addr_len, nprocs, (int) mca_spml_ucx.ucp_workers,
@@ -343,46 +335,30 @@ int mca_spml_ucx_add_procs(ompi_proc_t** procs, size_t nprocs)
         goto error;
     }
 
-//     for (i = 0; i < nprocs; i++) {
-//         printf (">> wk_rsizes[%d] = %d\n",i, wk_rsizes[i]);
-//     }
     opal_progress_register(spml_ucx_default_progress);
 
-    mca_spml_ucx.remote_addrs_tbl = (char **)calloc(mca_spml_ucx.ucp_workers * nprocs, sizeof(char *));
-    memset(mca_spml_ucx.remote_addrs_tbl, 0, mca_spml_ucx.ucp_workers * nprocs * sizeof(char *));
+    mca_spml_ucx.remote_addrs_tbl = (char ***)calloc(mca_spml_ucx.ucp_workers, sizeof(char ***));
+    for (w = 0; w < ucp_workers; w++) {
+        mca_spml_ucx.remote_addrs_tbl[w] = (char **)calloc(nprocs, sizeof(char **));
+        memset(mca_spml_ucx.remote_addrs_tbl[w], 0, nprocs * sizeof(char **));
+    }
 
-//     /* Store all remote addresses */
-//     for (i = 0; i < mca_spml_ucx.ucp_workers; i++) {
-//         for (n = 0; n < nprocs; ++n) {
-//             j = (i * nprocs) + n;
-// //             dump_address("stored plain:", j, (char *)(wk_raddrs + wk_roffs[j]), wk_rsizes[j]);
-//             mca_spml_ucx.remote_addrs_tbl[j] = (char *)malloc(wk_rsizes[j]);
-//             memcpy(mca_spml_ucx.remote_addrs_tbl[j], (char *)(wk_raddrs + wk_roffs[j]),
-//                     wk_rsizes[j]);
-//             dump_address("mca_spml_ucx.remote_addrs_tbl, ", j, (char *)mca_spml_ucx.remote_addrs_tbl[j], wk_rsizes[j]);
-//         }
-//     }
-
-    /* Store all remote addresses, need to transpose */
-    for (i = 0, j = 0; i < mca_spml_ucx.ucp_workers; i++) {
-        for (n = 0; n < nprocs; n++, j++) {
-            k = (n * mca_spml_ucx.ucp_workers) + i;
-//             dump_address("stored plain:", j, (char *)(wk_raddrs + wk_roffs[j]), wk_rsizes[j]);
-            mca_spml_ucx.remote_addrs_tbl[j] = (char *)malloc(wk_rsizes[k]);
-            memcpy(mca_spml_ucx.remote_addrs_tbl[j], (char *)(wk_raddrs + wk_roffs[k]),
-                    wk_rsizes[k]);
-//             dump_address("mca_spml_ucx.remote_addrs_tbl, ", j, (char *)mca_spml_ucx.remote_addrs_tbl[j], wk_rsizes[k]);
+    /* Store all remote addresses */
+    int offset = 0;
+    for (i = 0, n = 0; n < nprocs; n++) {
+        for (w = 0; w < ucp_workers; w++, i++) {
+            mca_spml_ucx.remote_addrs_tbl[w][n] = (char *)malloc(wk_rsizes[i]);
+            memcpy(mca_spml_ucx.remote_addrs_tbl[w][n], (char *)(wk_raddrs + offset), wk_rsizes[i]);
+            offset+=wk_rsizes[i];
         }
     }
 
     /* Get the EP connection requests for all the processes from modex */
     for (n = 0; n < nprocs; ++n) {
         i = (my_rank + n) % nprocs;
-        //dump_address("during EP conn.", i, (char *)(wk_raddrs + wk_roffs[i]), wk_rsizes[i]);
 
         ep_params.field_mask = UCP_EP_PARAM_FIELD_REMOTE_ADDRESS;
-        ep_params.address    = (ucp_address_t *)mca_spml_ucx.remote_addrs_tbl[i];
-//         ep_params.address    = (ucp_address_t *)(wk_raddrs + wk_roffs[i]);
+        ep_params.address    = (ucp_address_t *)mca_spml_ucx.remote_addrs_tbl[0][i];
 
         err = ucp_ep_create(mca_spml_ucx_ctx_default.ucp_worker[0], &ep_params,
                 &mca_spml_ucx_ctx_default.ucp_peers[i].ucp_conn);
@@ -398,10 +374,6 @@ int mca_spml_ucx_add_procs(ompi_proc_t** procs, size_t nprocs)
         for (j = 0; j < MCA_MEMHEAP_MAX_SEGMENTS; j++) {
             mca_spml_ucx_ctx_default.ucp_peers[i].mkeys[j].key.rkey = NULL;
         }
-
-//         mca_spml_ucx.remote_addrs_tbl[i] = (char *)malloc(wk_rsizes[i]);
-//         memcpy(mca_spml_ucx.remote_addrs_tbl[i], (char *)(wk_raddrs + wk_roffs[i]),
-//                 wk_rsizes[i]);
     }
 
     for (i = 0; i < mca_spml_ucx.ucp_workers; i++) {
@@ -416,7 +388,6 @@ int mca_spml_ucx_add_procs(ompi_proc_t** procs, size_t nprocs)
 
     opal_common_ucx_mca_proc_added();
 
-//     printf ("ret %s\n", __FUNCTION__);
     return OSHMEM_SUCCESS;
 
 error2:
@@ -424,16 +395,25 @@ error2:
          if (mca_spml_ucx_ctx_default.ucp_peers[i].ucp_conn) {
              ucp_ep_destroy(mca_spml_ucx_ctx_default.ucp_peers[i].ucp_conn);
          }
-         if (mca_spml_ucx.remote_addrs_tbl[i]) {
-             free(mca_spml_ucx.remote_addrs_tbl[i]);
-         }
+    }
+
+    if (mca_spml_ucx.remote_addrs_tbl) {
+        for (w = 0; w < ucp_workers; w++) {
+            if (mca_spml_ucx.remote_addrs_tbl[w]) {
+                for (n = 0; n < nprocs; n++) {
+                    if (mca_spml_ucx.remote_addrs_tbl[w][n]) {
+                        free(mca_spml_ucx.remote_addrs_tbl[w][n]);
+                    }
+                }
+                free(mca_spml_ucx.remote_addrs_tbl[w]);
+            }
+        }
+        free(mca_spml_ucx.remote_addrs_tbl);
     }
 
     mca_spml_ucx_clear_put_op_mask(&mca_spml_ucx_ctx_default);
     if (mca_spml_ucx_ctx_default.ucp_peers)
         free(mca_spml_ucx_ctx_default.ucp_peers);
-    if (mca_spml_ucx.remote_addrs_tbl)
-        free(mca_spml_ucx.remote_addrs_tbl);
     free(wk_raddrs);
     free(wk_rsizes);
     free(wk_roffs);
@@ -689,6 +669,7 @@ static int mca_spml_ucx_ctx_create_common(long options, mca_spml_ucx_ctx_t **ucx
     ucp_ep_params_t ep_params;
     size_t i, nprocs = oshmem_num_procs();
     int j;
+    unsigned int cur_ucp_worker = mca_spml_ucx.ucp_worker_cnt++ % mca_spml_ucx.ucp_workers;
     ucs_status_t err;
     spml_ucx_mkey_t *ucx_mkey;
     sshmem_mkey_t *mkey;
@@ -698,6 +679,7 @@ static int mca_spml_ucx_ctx_create_common(long options, mca_spml_ucx_ctx_t **ucx
     ucx_ctx = malloc(sizeof(mca_spml_ucx_ctx_t));
     ucx_ctx->options = options;
     ucx_ctx->ucp_worker = calloc(1, sizeof(ucp_worker_h));
+    ucx_ctx->ucp_workers = 1;
 
     params.field_mask  = UCP_WORKER_PARAM_FIELD_THREAD_MODE;
     if (oshmem_mpi_thread_provided == SHMEM_THREAD_SINGLE || options & SHMEM_CTX_PRIVATE || options & SHMEM_CTX_SERIALIZED) {
@@ -722,12 +704,10 @@ static int mca_spml_ucx_ctx_create_common(long options, mca_spml_ucx_ctx_t **ucx
     if (OSHMEM_SUCCESS != rc) {
         goto error2;
     }
-    unsigned int def_ucp_worker = mca_spml_ucx.ucp_worker_cnt++ % mca_spml_ucx.ucp_workers;
+
     for (i = 0; i < nprocs; i++) {
-//         printf ("def_ucp_worker = %d, tbl look up = %d = %lx\n", def_ucp_worker, (def_ucp_worker * nprocs) + i, mca_spml_ucx.remote_addrs_tbl[(def_ucp_worker * nprocs) + i]);
         ep_params.field_mask = UCP_EP_PARAM_FIELD_REMOTE_ADDRESS;
-        ep_params.address    = (ucp_address_t *)(mca_spml_ucx.remote_addrs_tbl[i]);
-//         dump_address("ctx_create ", i, (char *)mca_spml_ucx.remote_addrs_tbl[(def_ucp_worker * nprocs) + i], 53);
+        ep_params.address    = (ucp_address_t *)(mca_spml_ucx.remote_addrs_tbl[cur_ucp_worker][i]);
 
         err = ucp_ep_create(ucx_ctx->ucp_worker[0], &ep_params,
                             &ucx_ctx->ucp_peers[i].ucp_conn);
@@ -943,11 +923,13 @@ int mca_spml_ucx_fence(shmem_ctx_t ctx)
     opal_atomic_wmb();
 
     for (i=0; i < ucx_ctx->ucp_workers; i++) {
-        err = ucp_worker_fence(ucx_ctx->ucp_worker[i]);
-        if (UCS_OK != err) {
-             SPML_UCX_ERROR("fence failed: %s", ucs_status_string(err));
-             oshmem_shmem_abort(-1);
-             return OSHMEM_ERROR;
+        if (ucx_ctx->ucp_worker[i] != NULL) {
+            err = ucp_worker_fence(ucx_ctx->ucp_worker[i]);
+            if (UCS_OK != err) {
+                 SPML_UCX_ERROR("fence failed: %s", ucs_status_string(err));
+                 oshmem_shmem_abort(-1);
+                 return OSHMEM_ERROR;
+            }
         }
     }
     return OSHMEM_SUCCESS;
@@ -980,10 +962,12 @@ int mca_spml_ucx_quiet(shmem_ctx_t ctx)
     opal_atomic_wmb();
 
     for (i = 0; i < ucx_ctx->ucp_workers; i++) {
-        ret = opal_common_ucx_worker_flush(ucx_ctx->ucp_worker[i]);
-        if (OMPI_SUCCESS != ret) {
-             oshmem_shmem_abort(-1);
-             return ret;
+        if (ucx_ctx->ucp_worker[i] != NULL) {
+            ret = opal_common_ucx_worker_flush(ucx_ctx->ucp_worker[i]);
+            if (OMPI_SUCCESS != ret) {
+                 oshmem_shmem_abort(-1);
+                 return ret;
+            }
         }
     }
 

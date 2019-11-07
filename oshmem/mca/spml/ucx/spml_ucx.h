@@ -95,7 +95,7 @@ struct mca_spml_ucx {
     int                      heap_reg_nb;
     bool                     enabled;
     mca_spml_ucx_get_mkey_slow_fn_t get_mkey_slow;
-    char                     **remote_addrs_tbl;
+    char                     ***remote_addrs_tbl;
     mca_spml_ucx_ctx_array_t active_array;
     mca_spml_ucx_ctx_array_t idle_array;
     int                      priority; /* component priority */

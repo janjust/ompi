@@ -320,8 +320,8 @@ static int spml_ucx_init(void)
         if (UCS_OK != err) {
             return OSHMEM_ERROR;
         }
+        mca_spml_ucx_ctx_default.ucp_workers++;
     }
-    mca_spml_ucx_ctx_default.ucp_workers = mca_spml_ucx.ucp_workers;
 
     wrk_attr.field_mask = UCP_WORKER_ATTR_FIELD_THREAD_MODE;
     err = ucp_worker_query(mca_spml_ucx_ctx_default.ucp_worker[0], &wrk_attr);
