@@ -42,20 +42,6 @@ typedef struct {
 } _mem_record_list_item_t;
 OBJ_CLASS_DECLARATION(_mem_record_list_item_t);
 
-/* thread-local table */
-typedef struct {
-    opal_list_item_t super;
-    opal_common_ucx_wpool_t *wpool;
-    _tlocal_ctx_t **ctx_tbl;
-    size_t ctx_tbl_size;
-    _tlocal_mem_t **mem_tbl;
-    size_t mem_tbl_size;
-} _tlocal_table_t;
-
-OBJ_CLASS_DECLARATION(_tlocal_table_t);
-
-static int _tlocal_tls_ctxtbl_extend(_tlocal_table_t *tbl, size_t append);
-static int _tlocal_tls_memtbl_extend(_tlocal_table_t *tbl, size_t append);
 static _tlocal_table_t* _common_ucx_tls_init(opal_common_ucx_wpool_t *wpool);
 static void _common_ucx_tls_cleanup(_tlocal_table_t *tls);
 static inline _tlocal_ctx_t *_tlocal_ctx_search(_tlocal_table_t *tls,
