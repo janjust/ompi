@@ -35,15 +35,9 @@ typedef struct {
     ucp_address_t *recv_waddr;
     size_t recv_waddr_len;
 
-    /* Thread-local key to allow each thread to have
-     * local information assisiated with this wpool */
-    opal_tsd_key_t tls_key;
-
     /* Bookkeeping information */
     opal_list_t idle_workers;
     opal_list_t active_workers;
-
-    opal_list_t tls_list;
 } opal_common_ucx_wpool_t;
 
 /* Worker Pool Context (wpctx) is an object that is comprised of a set of UCP
@@ -66,6 +60,10 @@ typedef struct {
      * let thread know that this context is no longer valid */
     opal_list_t tls_workers;
     volatile int released;
+
+    /* Thread-local key to allow each thread to have
+     * local information associated with this wpctx */
+    opal_tsd_key_t tls_key;
 
     /* UCX addressing information */
     char *recv_worker_addrs;
@@ -116,9 +114,13 @@ typedef struct opal_common_ucx_winfo {
     ucs_status_ptr_t inflight_req;
 } opal_common_ucx_winfo_t;
 
+/* handle circular definition */
+typedef struct __tlocal_mem_t _tlocal_mem_t;
+
 typedef struct {
     opal_common_ucx_winfo_t *winfo;
     ucp_rkey_h *rkeys;
+    _tlocal_mem_t *mem_rec; 
 } opal_common_ucx_tlocal_fast_ptrs_t;
 
 typedef void (*opal_common_ucx_user_req_handler_t)(void *request);
@@ -157,7 +159,6 @@ typedef enum {
 typedef int (*opal_common_ucx_exchange_func_t)(void *my_info, size_t my_info_len,
                                                char **recv_info, int **disps,
                                                void *metadata);
-
 
 /* Manage Worker Pool (wpool) */
 OPAL_DECLSPEC opal_common_ucx_wpool_t * opal_common_ucx_wpool_allocate(void);
