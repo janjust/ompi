@@ -20,8 +20,6 @@
  ******************************************************************************/
 
 OBJ_CLASS_INSTANCE(_winfo_list_item_t, opal_list_item_t, NULL, NULL);
-OBJ_CLASS_INSTANCE(_ctx_record_list_item_t, opal_list_item_t, NULL, NULL);
-OBJ_CLASS_INSTANCE(_mem_record_list_item_t, opal_list_item_t, NULL, NULL);
 
 // TODO: Remove once debug is completed
 #ifdef OPAL_COMMON_UCX_WPOOL_DBG
@@ -156,7 +154,7 @@ opal_common_ucx_wpool_init(opal_common_ucx_wpool_t *wpool,
     status = ucp_config_read("MPI", NULL, &config);
     if (UCS_OK != status) {
         MCA_COMMON_UCX_VERBOSE(1, "ucp_config_read failed: %d", status);
-        return OPAL_ERROR;
+    
     }
 
     /* initialize UCP context */
@@ -383,7 +381,6 @@ opal_common_ucx_wpctx_create(opal_common_ucx_wpool_t *wpool, int comm_size,
 
     OBJ_CONSTRUCT(&ctx->mutex, opal_recursive_mutex_t);
     OBJ_CONSTRUCT(&ctx->tls_workers, opal_list_t);
-    ctx->released = 0;
     ctx->refcntr = 1; /* application holding the context */
     ctx->wpool = wpool;
     ctx->comm_size = comm_size;
@@ -417,10 +414,6 @@ opal_common_ucx_wpctx_release(opal_common_ucx_ctx_t *ctx)
 
     /* Application is expected to guarantee that no operation
      * is performed on the context that is being released */
-
-    /* Mark that this context was released by application
-     * Threads will use this flag to perform deferred cleanup */
-    ctx->released = 1;
 
     ctx_rec = _tlocal_get_ctx_rec(ctx->tls_key);
     if (ctx_rec) {
@@ -533,8 +526,6 @@ int opal_common_ucx_wpmem_create(opal_common_ucx_ctx_t *ctx,
     ucs_status_t status;
     int ret = OPAL_SUCCESS;
 
-    mem->released = 0;
-    mem->refcntr = 1; /* application holding this memory handler */
     mem->ctx = ctx;
     mem->mem_addrs = NULL;
     mem->mem_displs = NULL;
@@ -580,12 +571,6 @@ OPAL_DECLSPEC int
 opal_common_ucx_wpmem_free(opal_common_ucx_wpmem_t *mem)
 {
     int my_refcntr = -1;
-
-    /* Mark that this memory handler has been called */
-    mem->released = 1;
-
-    /* Decrement the reference counter */
-    my_refcntr = OPAL_ATOMIC_ADD_FETCH32(&mem->refcntr, -1);
 
     /* Make sure that all the loads/stores are complete */
     opal_atomic_wmb();
@@ -648,15 +633,12 @@ static int _comm_ucx_wpmem_map(opal_common_ucx_wpool_t *wpool,
 
 static void _common_ucx_wpmem_free(opal_common_ucx_wpmem_t *mem)
 {
-    opal_common_ucx_tlocal_fast_ptrs_t *fp = NULL;
     _tlocal_mem_t *mem_rec = NULL;
     
-    opal_tsd_getspecific(mem->mem_tls_key, (void**)&fp);
-    if(fp) {
-        mem_rec = fp->mem_rec;
+    opal_tsd_getspecific(mem->mem_tls_key, (void**)&mem_rec);
+    if(mem_rec) {
         free(mem_rec->mem->rkeys);
         free(mem_rec->mem);
-        free(mem_rec->mem_tls_ptr);
     }
     
     opal_tsd_key_delete(mem->mem_tls_key);
@@ -666,44 +648,12 @@ static void _common_ucx_wpmem_free(opal_common_ucx_wpmem_t *mem)
     free(mem);
 }
 
-static int
-_common_ucx_wpmem_signup(opal_common_ucx_wpmem_t *mem)
-{
-    /* Increment the reference counter */
-    OPAL_ATOMIC_ADD_FETCH32(&mem->refcntr, 1);
-    return OPAL_SUCCESS;
-}
-
-static void
-_common_ucx_mem_signout(opal_common_ucx_wpmem_t *mem)
-{
-    int my_refcntr = -1;
-
-    /* Make sure that all the loads are complete at this
-     * point so if somebody else will see refcntr ==0
-     * and release the structure we would have all we need
-     */
-    opal_atomic_rmb();
-
-    /* Decrement the reference counter */
-    my_refcntr = OPAL_ATOMIC_ADD_FETCH32(&mem->refcntr, -1);
-
-    /* a counterpart to the rmb above */
-    opal_atomic_wmb();
-
-    if (0 == my_refcntr) {
-        _common_ucx_wpmem_free(mem);
-    }
-
-    return;
-}
-
 static inline _tlocal_ctx_t *
 _tlocal_get_ctx_rec(opal_tsd_key_t tls_key){
     _tlocal_ctx_t *ctx_rec = NULL;
-    opal_tsd_getspecific(tls_key, (void**)&ctx_rec);
+    int rc = opal_tsd_getspecific(tls_key, (void**)&ctx_rec);
 
-    if (!ctx_rec) {
+    if (OPAL_SUCCESS != rc) {
         return NULL;
     }
 
@@ -811,12 +761,7 @@ _tlocal_mem_rec_cleanup(void *arg)
     /* Remove myself from the memory context structure
      * This may result in context release as we are using
      * delayed cleanup */
-    _common_ucx_mem_signout(mem_rec->gmem);
-
-    /* Release fast-path pointers */
-    if (NULL != mem_rec->mem_tls_ptr) {
-        free(mem_rec->mem_tls_ptr);
-    }
+    _common_ucx_wpmem_free(mem_rec->gmem);
 
     assert(mem_rec->ctx_rec != NULL);
     OPAL_ATOMIC_ADD_FETCH32(&mem_rec->ctx_rec->refcnt, -1);
@@ -846,27 +791,13 @@ static _tlocal_mem_t *_tlocal_add_mem_rec(opal_common_ucx_wpmem_t *mem, _tlocal_
     mem_rec->mem->worker = ctx_rec->winfo;
     mem_rec->mem->rkeys = calloc(mem->ctx->comm_size, sizeof(*mem_rec->mem->rkeys));
 
-    /* set fast path */
-    mem_rec->mem_tls_ptr = calloc(1, sizeof(*mem_rec->mem_tls_ptr));
-    if (!mem_rec->mem_tls_ptr) {
-        return NULL;
-    }
-    mem_rec->mem_tls_ptr->winfo = ctx_rec->winfo;
-    mem_rec->mem_tls_ptr->rkeys = mem_rec->mem->rkeys;
-    mem_rec->mem_tls_ptr->mem_rec = mem_rec;
-
-    rc = opal_tsd_setspecific(mem->mem_tls_key, mem_rec->mem_tls_ptr);
+    rc = opal_tsd_setspecific(mem->mem_tls_key, mem_rec);
     if (OPAL_SUCCESS != rc) {
         return NULL;
     }
 
     opal_atomic_wmb();
 
-    rc = _common_ucx_wpmem_signup(mem);
-    if (OPAL_SUCCESS != rc) {
-        return NULL;
-    }
-    
     return mem_rec;
 }
 

@@ -59,7 +59,6 @@ typedef struct {
      * we need to keep track of them to have an ability to
      * let thread know that this context is no longer valid */
     opal_list_t tls_workers;
-    volatile int released;
 
     /* Thread-local key to allow each thread to have
      * local information associated with this wpctx */
@@ -81,10 +80,6 @@ typedef struct {
 typedef struct {
     /* reference context to which memory region belongs */
     opal_common_ucx_ctx_t *ctx;
-
-    /* object lifetime control */
-    volatile int released;
-    opal_atomic_int32_t refcntr;
 
     /* UCX memory handler */
     ucp_mem_h memh;
@@ -114,14 +109,16 @@ typedef struct opal_common_ucx_winfo {
     ucs_status_ptr_t inflight_req;
 } opal_common_ucx_winfo_t;
 
-/* handle circular definition */
-typedef struct __tlocal_mem_t _tlocal_mem_t;
+typedef struct __mem_info_t _mem_info_t;
+typedef struct __tlocal_ctx_t _tlocal_ctx_t;
 
 typedef struct {
     opal_common_ucx_winfo_t *winfo;
     ucp_rkey_h *rkeys;
-    _tlocal_mem_t *mem_rec; 
-} opal_common_ucx_tlocal_fast_ptrs_t;
+    opal_common_ucx_wpmem_t *gmem;
+    _mem_info_t *mem;
+    _tlocal_ctx_t *ctx_rec;
+} _tlocal_mem_t;
 
 typedef void (*opal_common_ucx_user_req_handler_t)(void *request);
 
@@ -186,34 +183,34 @@ opal_common_ucx_tlocal_fetch(opal_common_ucx_wpmem_t *mem, int target,
                                 ucp_ep_h *_ep, ucp_rkey_h *_rkey,
                                 opal_common_ucx_winfo_t **_winfo)
 {
-    opal_common_ucx_tlocal_fast_ptrs_t *fp = NULL;
+    _tlocal_mem_t *mem_rec = NULL;
     int expr;
     int rc = OPAL_SUCCESS;
 
     /* First check the fast-path */
-    rc = opal_tsd_getspecific(mem->mem_tls_key, (void**)&fp);
+    rc = opal_tsd_getspecific(mem->mem_tls_key, (void**)&mem_rec);
     if (OPAL_SUCCESS != rc) {
         return rc;
     }
-    expr = fp && (NULL != fp->winfo) && (fp->winfo->endpoints[target]) &&
-            (NULL != fp->rkeys[target]);
+    expr = mem_rec && (NULL != mem_rec->winfo) && (mem_rec->winfo->endpoints[target]) &&
+            (NULL != mem_rec->rkeys[target]);
     if (OPAL_UNLIKELY(!expr)) {
         rc = opal_common_ucx_tlocal_fetch_spath(mem, target);
         if (OPAL_SUCCESS != rc) {
             return rc;
         }
-        rc = opal_tsd_getspecific(mem->mem_tls_key, (void**)&fp);
+        rc = opal_tsd_getspecific(mem->mem_tls_key, (void**)&mem_rec);
         if (OPAL_SUCCESS != rc) {
             return rc;
         }
     }
-    MCA_COMMON_UCX_ASSERT(fp && (NULL != fp->winfo) &&
-                          (fp->winfo->endpoints[target])
-                          && (NULL != fp->rkeys[target]));
+    MCA_COMMON_UCX_ASSERT(mem_rec && (NULL != mem_rec->winfo) &&
+                          (mem_rec->winfo->endpoints[target])
+                          && (NULL != mem_rec->rkeys[target]));
 
-    *_rkey = fp->rkeys[target];
-    *_winfo = fp->winfo;
-    *_ep = fp->winfo->endpoints[target];
+    *_rkey = mem_rec->rkeys[target];
+    *_winfo = mem_rec->winfo;
+    *_ep = mem_rec->winfo->endpoints[target];
     return OPAL_SUCCESS;
 }
 
