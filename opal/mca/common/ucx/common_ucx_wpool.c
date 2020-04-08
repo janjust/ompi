@@ -21,6 +21,8 @@
  ******************************************************************************/
 
 OBJ_CLASS_INSTANCE(_winfo_list_item_t, opal_list_item_t, NULL, NULL);
+OBJ_CLASS_INSTANCE(_ctx_record_list_item_t, opal_list_item_t, NULL, NULL);
+//OBJ_CLASS_INSTANCE(_mem_record_list_item_t, opal_list_item_t, NULL, NULL);
 
 // TODO: Remove once debug is completed
 #ifdef OPAL_COMMON_UCX_WPOOL_DBG
@@ -568,21 +570,6 @@ int opal_common_ucx_wpmem_create(opal_common_ucx_ctx_t *ctx,
     return ret;
 }
 
-OPAL_DECLSPEC int
-opal_common_ucx_wpmem_free(opal_common_ucx_wpmem_t *mem)
-{
-    int my_refcntr = -1;
-
-    /* Make sure that all the loads/stores are complete */
-    opal_atomic_wmb();
-
-    if (0 == my_refcntr) {
-        _common_ucx_wpmem_free(mem);
-    }
-    return OPAL_SUCCESS;
-}
-
-
 static int _comm_ucx_wpmem_map(opal_common_ucx_wpool_t *wpool,
                              void **base, size_t size, ucp_mem_h *memh_ptr,
                              opal_common_ucx_mem_type_t mem_type)
@@ -632,14 +619,13 @@ static int _comm_ucx_wpmem_map(opal_common_ucx_wpool_t *wpool,
     return ret;
 }
 
-static void _common_ucx_wpmem_free(opal_common_ucx_wpmem_t *mem)
+int opal_common_ucx_wpmem_free(opal_common_ucx_wpmem_t *mem)
 {
     _tlocal_mem_t *mem_rec = NULL;
     
     opal_tsd_getspecific(mem->mem_tls_key, (void**)&mem_rec);
     if(mem_rec) {
-        free(mem_rec->mem->rkeys);
-        free(mem_rec->mem);
+        free(mem_rec->rkeys);
     }
     
     opal_tsd_key_delete(mem->mem_tls_key);
@@ -647,6 +633,8 @@ static void _common_ucx_wpmem_free(opal_common_ucx_wpmem_t *mem)
     free(mem->mem_displs);
     ucp_mem_unmap(mem->ctx->wpool->ucp_ctx, mem->memh);
     free(mem);
+
+    return OPAL_SUCCESS;
 }
 
 static inline _tlocal_ctx_t *
@@ -753,22 +741,20 @@ _tlocal_mem_rec_cleanup(void *arg)
     size_t i;
 
     for(i = 0; i < mem_rec->gmem->ctx->comm_size; i++) {
-        if (mem_rec->mem->rkeys[i]) {
-            ucp_rkey_destroy(mem_rec->mem->rkeys[i]);
+        if (mem_rec->rkeys[i]) {
+            ucp_rkey_destroy(mem_rec->rkeys[i]);
         }
     }
-    free(mem_rec->mem->rkeys);
+    free(mem_rec->rkeys);
 
     /* Remove myself from the memory context structure
      * This may result in context release as we are using
      * delayed cleanup */
-    _common_ucx_wpmem_free(mem_rec->gmem);
+    opal_common_ucx_wpmem_free(mem_rec->gmem);
 
     assert(mem_rec->ctx_rec != NULL);
     OPAL_ATOMIC_ADD_FETCH32(&mem_rec->ctx_rec->refcnt, -1);
     assert(mem_rec->ctx_rec->refcnt >= 0);
-
-    free(mem_rec->mem);
 
     memset(mem_rec, 0, sizeof(*mem_rec));
 }
@@ -785,12 +771,8 @@ static _tlocal_mem_t *_tlocal_add_mem_rec(opal_common_ucx_wpmem_t *mem, _tlocal_
     OPAL_ATOMIC_ADD_FETCH32(&ctx_rec->refcnt, 1);
 
     mem_rec->gmem = mem;
-    mem_rec->mem = calloc(1, sizeof(*mem_rec->mem));
-    if (!mem_rec->mem) {
-        return NULL;
-    }
-    mem_rec->mem->worker = ctx_rec->winfo;
-    mem_rec->mem->rkeys = calloc(mem->ctx->comm_size, sizeof(*mem_rec->mem->rkeys));
+    mem_rec->winfo = ctx_rec->winfo;
+    mem_rec->rkeys = calloc(mem->ctx->comm_size, sizeof(*mem_rec->rkeys));
 
     rc = opal_tsd_setspecific(mem->mem_tls_key, mem_rec);
     if (OPAL_SUCCESS != rc) {
@@ -805,13 +787,12 @@ static _tlocal_mem_t *_tlocal_add_mem_rec(opal_common_ucx_wpmem_t *mem, _tlocal_
 static int
 _tlocal_mem_create_rkey(_tlocal_mem_t *mem_rec, ucp_ep_h ep, int target)
 {
-    _mem_info_t *minfo = mem_rec->mem;
     opal_common_ucx_wpmem_t *gmem = mem_rec->gmem;
     int displ = gmem->mem_displs[target];
     ucs_status_t status;
 
     status = ucp_ep_rkey_unpack(ep, &gmem->mem_addrs[displ],
-                                &minfo->rkeys[target]);
+                                &mem_rec->rkeys[target]);
     if (status != UCS_OK) {
         MCA_COMMON_UCX_VERBOSE(1, "ucp_ep_rkey_unpack failed: %d", status);
         return OPAL_ERROR;
@@ -827,7 +808,6 @@ opal_common_ucx_tlocal_fetch_spath(opal_common_ucx_wpmem_t *mem, int target)
     _tlocal_ctx_t *ctx_rec = NULL;
     opal_common_ucx_winfo_t *winfo = NULL;
     _tlocal_mem_t *mem_rec = NULL;
-    _mem_info_t *mem_info = NULL;
     ucp_ep_h ep;
     int rc = OPAL_SUCCESS;
 
@@ -852,10 +832,8 @@ opal_common_ucx_tlocal_fetch_spath(opal_common_ucx_wpmem_t *mem, int target)
     /* Obtain the memory region info */
     mem_rec = _tlocal_add_mem_rec(mem, ctx_rec);
 
-    mem_info = mem_rec->mem;
-
     /* Obtain the rkey */
-    if (OPAL_UNLIKELY(NULL == mem_info->rkeys[target])) {
+    if (OPAL_UNLIKELY(NULL == mem_rec->rkeys[target])) {
         /* Create the rkey */
         rc = _tlocal_mem_create_rkey(mem_rec, ep, target);
         if (rc) {

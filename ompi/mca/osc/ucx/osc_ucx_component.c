@@ -649,7 +649,7 @@ int ompi_osc_ucx_win_detach(struct ompi_win_t *win, const void *base) {
 
     module->local_dynamic_win_info[contain].refcnt--;
     if (module->local_dynamic_win_info[contain].refcnt == 0) {
-        ret = opal_common_ucx_wpmem_free(module->local_dynamic_win_info[contain].mem);
+        opal_common_ucx_wpmem_free(module->local_dynamic_win_info[contain].mem);
         memmove((void *)&(module->local_dynamic_win_info[contain]),
                 (void *)&(module->local_dynamic_win_info[contain+1]),
                 (OMPI_OSC_UCX_ATTACH_MAX - (contain + 1)) * sizeof(ompi_osc_local_dynamic_win_info_t));
@@ -685,19 +685,13 @@ int ompi_osc_ucx_free(struct ompi_win_t *win) {
     free(module->addrs);
     free(module->state_addrs);
 
-    ret = opal_common_ucx_wpmem_free(module->state_mem);
-    if (ret != OMPI_SUCCESS) {
-      return ret;
-    }
-
-    ret = opal_common_ucx_wpmem_free(module->mem);
-    if (ret != OMPI_SUCCESS) {
-      return ret;
-    }
+    opal_common_ucx_wpmem_free(module->state_mem);
+    opal_common_ucx_wpmem_free(module->mem);
 
     opal_common_ucx_wpctx_release(module->ctx);
 
-    if (module->disp_units) free(module->disp_units);
+    if (module->disp_units)
+        free(module->disp_units);
     ompi_comm_free(&module->comm);
 
     free(module);

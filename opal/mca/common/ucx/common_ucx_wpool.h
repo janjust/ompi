@@ -109,14 +109,12 @@ typedef struct opal_common_ucx_winfo {
     ucs_status_ptr_t inflight_req;
 } opal_common_ucx_winfo_t;
 
-typedef struct __mem_info_t _mem_info_t;
 typedef struct __tlocal_ctx_t _tlocal_ctx_t;
 
 typedef struct {
+    opal_common_ucx_wpmem_t *gmem;
     opal_common_ucx_winfo_t *winfo;
     ucp_rkey_h *rkeys;
-    opal_common_ucx_wpmem_t *gmem;
-    _mem_info_t *mem;
     _tlocal_ctx_t *ctx_rec;
 } _tlocal_mem_t;
 

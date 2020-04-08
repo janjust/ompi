@@ -11,18 +11,6 @@ struct __tlocal_ctx_t {
     opal_atomic_int32_t refcnt;
 };
 
-struct __mem_info_t {
-    opal_common_ucx_winfo_t *worker;
-    ucp_rkey_h *rkeys;
-};
-
-// struct __tlocal_mem_t {
-//     opal_common_ucx_wpmem_t *gmem;
-//     _mem_info_t *mem;
-//     opal_common_ucx_tlocal_fast_ptrs_t *mem_tls_ptr;
-//     _tlocal_ctx_t *ctx_rec;
-// };
-
 typedef struct {
     opal_list_item_t super;
     opal_common_ucx_winfo_t *ptr;
@@ -68,6 +56,5 @@ static void _common_ucx_wpctx_remove(opal_common_ucx_ctx_t *ctx,
 static int _comm_ucx_wpmem_map(opal_common_ucx_wpool_t *wpool,
                                void **base, size_t size, ucp_mem_h *memh_ptr,
                                opal_common_ucx_mem_type_t mem_type);
-static void _common_ucx_wpmem_free(opal_common_ucx_wpmem_t *mem);
 
 #endif // COMMON_UCX_WPOOL_INT_H
