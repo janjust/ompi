@@ -38,6 +38,11 @@ typedef struct {
     /* Bookkeeping information */
     opal_list_t idle_workers;
     opal_list_t active_workers;
+
+    /* UCX addressing information */
+    char *recv_worker_addrs;
+    int *recv_worker_displs;
+    size_t comm_size;
 } opal_common_ucx_wpool_t;
 
 /* Worker Pool Context (wpctx) is an object that is comprised of a set of UCP
@@ -63,11 +68,6 @@ typedef struct {
     /* Thread-local key to allow each thread to have
      * local information associated with this wpctx */
     opal_tsd_key_t tls_key;
-
-    /* UCX addressing information */
-    char *recv_worker_addrs;
-    int *recv_worker_displs;
-    size_t comm_size;
 } opal_common_ucx_ctx_t;
 
 /* Worker Pool memory (wpmem) is an object that represents a remotely accessible

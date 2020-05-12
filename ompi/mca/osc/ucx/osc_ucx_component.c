@@ -343,6 +343,13 @@ static int component_select(struct ompi_win_t *win, void **base, size_t size, in
          */
         mca_osc_ucx_component.env_initialized = true;
         env_initialized = true;
+
+        ret = opal_common_ucx_wpctx_create(mca_osc_ucx_component.wpool, comm_size,
+                                         &exchange_len_info, (void *)module->comm,
+                                         &module->ctx);
+        if (OMPI_SUCCESS != ret) {
+            goto error;
+        }
     }
 
     /* Account for the number of active "modules" = MPI windows */
@@ -419,13 +426,6 @@ select_unlock:
         if (OMPI_SUCCESS != ret) {
             goto error;
         }
-    }
-
-    ret = opal_common_ucx_wpctx_create(mca_osc_ucx_component.wpool, comm_size,
-                                     &exchange_len_info, (void *)module->comm,
-                                     &module->ctx);
-    if (OMPI_SUCCESS != ret) {
-        goto error;
     }
 
     if (flavor == MPI_WIN_FLAVOR_ALLOCATE || flavor == MPI_WIN_FLAVOR_CREATE) {
