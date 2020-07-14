@@ -105,7 +105,7 @@ typedef struct private_ipv4_t {
 static private_ipv4_t* private_ipv4 = NULL;
 
 #if OPAL_ENABLE_IPV6
-static opal_tsd_key_t hostname_tsd_key;
+static opal_tsd_tracked_key_t hostname_tsd_key;
 
 
 static void
@@ -121,12 +121,12 @@ get_hostname_buffer(void)
     void *buffer;
     int ret;
 
-    ret = opal_tsd_get(hostname_tsd_key, &buffer);
+    ret = opal_tsd_tracked_key_get(&hostname_tsd_key, &buffer);
     if (OPAL_SUCCESS != ret) return NULL;
 
     if (NULL == buffer) {
         buffer = (void*) malloc((NI_MAXHOST + 1) * sizeof(char));
-        ret = opal_tsd_set(hostname_tsd_key, buffer);
+        ret = opal_tsd_tracked_key_set(&hostname_tsd_key, buffer);
     }
 
     return (char*) buffer;
@@ -144,6 +144,9 @@ get_hostname_buffer(void)
  */
 static void opal_net_finalize (void)
 {
+#if OPAL_ENABLE_IPV6
+    OBJ_DESTRUCT(&hostname_tsd_key);
+#endif
     free(private_ipv4);
     private_ipv4 = NULL;
 }
@@ -192,7 +195,8 @@ opal_net_init(void)
 
  do_local_init:
 #if OPAL_ENABLE_IPV6
-    return opal_tsd_key_create(&hostname_tsd_key, hostname_cleanup);
+    OBJ_CONSTRUCT(&hostname_tsd_key, opal_tsd_tracked_key_t);
+    opal_tsd_tracked_key_set_destructor(&hostname_tsd_key, hostname_cleanup);
 #else
     return OPAL_SUCCESS;
 #endif
@@ -468,6 +472,9 @@ opal_net_init()
 int
 opal_net_finalize()
 {
+#if OPAL_ENABLE_IPV6
+    OBJ_DESTRUCT(&hostname_tsd_key);
+#endif
     return OPAL_SUCCESS;
 }
 

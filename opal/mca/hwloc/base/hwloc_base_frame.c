@@ -243,6 +243,8 @@ static int opal_hwloc_base_open(mca_base_open_flag_t flags)
     return OPAL_SUCCESS;
 }
 
+static opal_tsd_tracked_key_t print_tsd_key;
+
 static int opal_hwloc_base_close(void)
 {
     int ret;
@@ -250,6 +252,7 @@ static int opal_hwloc_base_close(void)
         return OPAL_SUCCESS;
     }
 
+    OBJ_DESTRUCT(&print_tsd_key);
     /* no need to close the component as it was statically opened */
 
     /* for support of tools such as ompi_info */
@@ -277,7 +280,6 @@ static int opal_hwloc_base_close(void)
 }
 
 static bool fns_init=false;
-static opal_tsd_key_t print_tsd_key;
 char* opal_hwloc_print_null = "NULL";
 
 static void buffer_cleanup(void *value)
@@ -301,13 +303,12 @@ opal_hwloc_print_buffers_t *opal_hwloc_get_print_buffer(void)
 
     if (!fns_init) {
         /* setup the print_args function */
-        if (OPAL_SUCCESS != (ret = opal_tsd_key_create(&print_tsd_key, buffer_cleanup))) {
-            return NULL;
-        }
+        OBJ_CONSTRUCT(&print_tsd_key, opal_tsd_tracked_key_t);
+        opal_tsd_tracked_key_set_destructor(&print_tsd_key, buffer_cleanup);
         fns_init = true;
     }
 
-    ret = opal_tsd_get(print_tsd_key, (void**)&ptr);
+    ret = opal_tsd_tracked_key_get(&print_tsd_key, (void**)&ptr);
     if (OPAL_SUCCESS != ret) return NULL;
 
     if (NULL == ptr) {
@@ -316,7 +317,7 @@ opal_hwloc_print_buffers_t *opal_hwloc_get_print_buffer(void)
             ptr->buffers[i] = (char *) malloc((OPAL_HWLOC_PRINT_MAX_SIZE+1) * sizeof(char));
         }
         ptr->cntr = 0;
-        ret = opal_tsd_set(print_tsd_key, (void*)ptr);
+        ret = opal_tsd_tracked_key_set(&print_tsd_key, (void*)ptr);
     }
 
     return (opal_hwloc_print_buffers_t*) ptr;
