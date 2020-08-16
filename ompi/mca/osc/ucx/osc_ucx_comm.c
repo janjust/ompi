@@ -324,6 +324,8 @@ static inline int end_atomicity(
         OSC_UCX_VERBOSE(1, "opal_common_ucx_mem_fetch failed: %d", ret);
         return OMPI_ERROR;
     }
+    
+    opal_atomic_wmb();
 
     return ret;
 }
@@ -1031,7 +1033,6 @@ int get_accumulate_req(const void *origin_addr, int origin_count,
         ompi_request_complete(&ucx_req->super, true);
     }
 
-
     return end_atomicity(module, target, lock_acquired, free_addr);
 }
 
@@ -1057,6 +1058,14 @@ int ompi_osc_ucx_rput(const void *origin_addr, int origin_count,
     uint64_t remote_addr = (module->addrs[target]) + target_disp * OSC_UCX_GET_DISP(module, target);
     ompi_osc_ucx_request_t *ucx_req = NULL;
     int ret = OMPI_SUCCESS;
+
+//     char c = getenv("PUT_WAIT");
+//     if (c) {
+//         printf ("[%d] %d %s origin_count = %d, target = %d, target_displ = %d, target_count = %d \n", module->comm->c_local_group->grp_my_rank, getpid(), __FUNCTION__, origin_count, \
+//                 target, target_disp, target_count);
+//         fflush(stdout);
+//         sleep(20);
+//     }
 
     ret = check_sync_state(module, target, true);
     if (ret != OMPI_SUCCESS) {
@@ -1096,6 +1105,7 @@ int ompi_osc_ucx_rput(const void *origin_addr, int origin_count,
         return ret;
     }
 
+    opal_atomic_wmb();
     *request = &ucx_req->super;
 
     return ret;
@@ -1110,6 +1120,14 @@ int ompi_osc_ucx_rget(void *origin_addr, int origin_count,
     uint64_t remote_addr = (module->addrs[target]) + target_disp * OSC_UCX_GET_DISP(module, target);
     ompi_osc_ucx_request_t *ucx_req = NULL;
     int ret = OMPI_SUCCESS;
+
+//     char c = getenv("GET_WAIT");
+//     if (c) {
+//         printf ("[%d] %d %s origin_count = %d, target = %d, target_disp = %d, target_count = %d \n", module->comm->c_local_group->grp_my_rank, getpid(), __FUNCTION__, origin_count, target_disp, 
+//                 target, target_count);
+//         fflush(stdout);
+// //         sleep(20);
+//     }
 
     ret = check_sync_state(module, target, true);
     if (ret != OMPI_SUCCESS) {
@@ -1149,6 +1167,7 @@ int ompi_osc_ucx_rget(void *origin_addr, int origin_count,
         return ret;
     }
 
+    opal_atomic_wmb();
     *request = &ucx_req->super;
 
     return ret;
@@ -1178,6 +1197,7 @@ int ompi_osc_ucx_raccumulate(const void *origin_addr, int origin_count,
         return ret;
     }
 
+    opal_atomic_wmb();
     *request = &ucx_req->super;
 
     return ret;
@@ -1212,6 +1232,7 @@ int ompi_osc_ucx_rget_accumulate(const void *origin_addr, int origin_count,
         return ret;
     }
 
+    opal_atomic_wmb();
     *request = &ucx_req->super;
 
     return ret;

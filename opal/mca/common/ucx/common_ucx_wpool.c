@@ -485,7 +485,7 @@ int opal_common_ucx_wpmem_create(opal_common_ucx_ctx_t *ctx,
                                int *my_mem_addr_size,
                                opal_common_ucx_wpmem_t **mem_ptr)
 {
-    opal_common_ucx_wpmem_t *mem = calloc(1, sizeof(*wpmem));
+    opal_common_ucx_wpmem_t *mem = calloc(1, sizeof(*mem));
     void *rkey_addr = NULL;
     size_t rkey_addr_len;
     int ret = OPAL_SUCCESS;
@@ -891,13 +891,14 @@ opal_common_ucx_winfo_flush(opal_common_ucx_winfo_t *winfo, ucp_ep_h ep,
         ((opal_common_ucx_request_t *)req)->winfo = winfo;
     }
 
-    if(OPAL_COMMON_UCX_FLUSH_B) {
+    if(type == OPAL_COMMON_UCX_FLUSH_B) {
         rc = opal_common_ucx_wait_request_mt(req, "ucp_ep_flush_nb");
     } else {
         *req_ptr = req;
     }
     return rc;
 #endif
+    
     switch (type) {
     case OPAL_COMMON_UCX_FLUSH_NB_PREFERRED:
     case OPAL_COMMON_UCX_FLUSH_B:
@@ -930,11 +931,11 @@ opal_common_ucx_wpmem_flush(opal_common_ucx_wpmem_t *mem,
     OPAL_LIST_FOREACH(ctx_rec, &ctx->ctx_records, _ctx_record_t) {
         opal_common_ucx_winfo_t *winfo = ctx_rec->winfo;
         proc_vpid = ctx_rec->proc_vpid[target];
+        opal_mutex_lock(&winfo->mutex);
         ret = opal_hash_table_get_value_uint64(&winfo->ep_iops, proc_vpid, (void **) &ep_iop);
         if (OPAL_SUCCESS != ret) {
             continue;
         }
-        opal_mutex_lock(&winfo->mutex);
         rc = opal_common_ucx_winfo_flush(winfo, ep_iop->endpoint, OPAL_COMMON_UCX_FLUSH_B,
                                          scope, NULL);
         switch (scope) {
@@ -968,10 +969,28 @@ opal_common_ucx_wpmem_flush(opal_common_ucx_wpmem_t *mem,
     return rc;
 }
 
+
 OPAL_DECLSPEC int
-opal_common_ucx_wpmem_fence(opal_common_ucx_wpmem_t *mem) {
-    /* TODO */
-    return OPAL_SUCCESS;
+opal_common_ucx_wpmem_fence(opal_common_ucx_wpmem_t *mem)
+{
+    ucp_worker_h worker = NULL;
+    int rc = OPAL_SUCCESS;
+
+    _mem_record_t *mem_rec = _tlocal_get_mem_rec(mem->tls_key);
+    if (NULL == mem_rec) {
+        worker = mem->ctx->wpool->dflt_worker;
+    }
+    else {
+        worker = mem_rec->winfo->worker;
+    }
+
+    ucs_status_t status = ucp_worker_fence(worker);
+    if (UCS_OK != status) {
+        rc = OPAL_ERROR;
+    }
+    return rc;
+//     ucs_status_ptr_t request = ucp_worker_flush_nb(worker, 0, opal_common_ucx_empty_complete_cb);
+//     return opal_common_ucx_wait_request(request, worker, "ucp_worker_flush_nb");
 }
 
 OPAL_DECLSPEC void
