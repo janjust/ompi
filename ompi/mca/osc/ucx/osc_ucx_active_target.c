@@ -73,12 +73,12 @@ int ompi_osc_ucx_fence(int assert, struct ompi_win_t *win) {
         module->epoch_type.access = FENCE_EPOCH;
     }
 
-    if (!(assert & MPI_MODE_NOPRECEDE)) {
+//     if (!(assert & MPI_MODE_NOPRECEDE)) {
         ret = opal_common_ucx_wpmem_flush(module->mem, OPAL_COMMON_UCX_SCOPE_WORKER, 0/*ignore*/);
         if (ret != OMPI_SUCCESS) {
             return ret;
         }
-    }
+//     }
 
     return module->comm->c_coll->coll_barrier(module->comm,
                                               module->comm->c_coll->coll_barrier_module);

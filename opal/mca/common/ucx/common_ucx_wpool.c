@@ -86,22 +86,78 @@ exit:
 static void
 _winfo_destructor(opal_common_ucx_winfo_t *winfo)
 {
-    if (winfo->inflight_req != UCS_OK) {
-        opal_common_ucx_wait_request_mt(winfo->inflight_req,
-                                        "opal_common_ucx_flush");
-        winfo->inflight_req = UCS_OK;
-    }
+    printf ("%d %s winfo %p -> worker %p\n", getpid(), __FUNCTION__, winfo, &winfo->worker);
+//         printf ("sleeping %s %d\n", __FUNCTION__, getpid());
+//         sleep(15);
 
-    assert(winfo->global_inflight_ops == 0);
+//     if (winfo->inflight_req != UCS_OK) {
+// //         printf ("sleeping %s %d\n", __FUNCTION__, getpid());
+// //         sleep(15);
+//         printf ("%d %s calling ucx_wait_request_mt(%p) \n", getpid(), __FUNCTION__, winfo->inflight_req);
+//         opal_common_ucx_wait_request_mt(winfo->inflight_req,
+//                                         "opal_common_ucx_flush");
+//         winfo->inflight_req = UCS_OK;
+// //         winfo->global_inflight_ops = 0;
+//     }
+
+//     if (winfo->global_inflight_ops > 0 ) {
+//         printf ("sleeping %s %d\n", __FUNCTION__, getpid());
+//         sleep(15);
+//     }
+// 
+//     assert(winfo->global_inflight_ops == 0);
     winfo_ep_iop_t *ep_iop;
     void *iterator = NULL;
     size_t proc_vpid;
     int ret = OPAL_ERROR;
+    int progress;
+    int i = 0;
+
+    if (winfo->global_inflight_ops > 0) {
+        int rc = opal_common_ucx_winfo_flush(winfo, NULL, OPAL_COMMON_UCX_FLUSH_NB_PREFERRED,
+                                         OPAL_COMMON_UCX_SCOPE_WORKER, &winfo->inflight_req);
+        if(OPAL_UNLIKELY(OPAL_SUCCESS != rc)){
+            MCA_COMMON_UCX_VERBOSE(1, "opal_common_ucx_flush failed: %d", rc);
+        }
+    }
+
+    if (winfo->inflight_req != UCS_OK) {
+        printf ("%d %s calling ucx_wait_request_mt(%p) \n", getpid(), __FUNCTION__, winfo->inflight_req);
+        opal_common_ucx_wait_request_mt(winfo->inflight_req, "opal_common_ucx_flush");
+//         ucp_request_free(winfo->inflight_req);
+        winfo->inflight_req = UCS_OK;
+//         winfo->global_inflight_ops = 0;
+    }
 
     ret = opal_hash_table_get_first_key_uint64(&winfo->ep_iops, &proc_vpid,
                                                (void **)&ep_iop, &iterator);
     if (OPAL_SUCCESS == ret) {
         do {
+// //             if (winfo->inflight_req != UCS_OK) {
+//             if (winfo->global_inflight_ops > 0) {
+//                 printf ("%s(), flushing inflight_req = %p\n", __FUNCTION__, winfo->inflight_req);
+//                 int rc = opal_common_ucx_winfo_flush(winfo, ep_iop->endpoint, OPAL_COMMON_UCX_FLUSH_NB_PREFERRED,
+//                                                  OPAL_COMMON_UCX_SCOPE_WORKER, &winfo->inflight_req);
+//                 int rc = opal_common_ucx_winfo_flush(winfo, ep_iop->endpoint, OPAL_COMMON_UCX_FLUSH_NB_PREFERRED,
+//                                                  OPAL_COMMON_UCX_SCOPE_EP, &winfo->inflight_req);
+//                 if(OPAL_UNLIKELY(OPAL_SUCCESS != rc)){
+//                     MCA_COMMON_UCX_VERBOSE(1, "opal_common_ucx_flush failed: %d", rc);
+//                 }
+// 
+//                 if (winfo->inflight_req != UCS_OK) {
+//                     printf ("At %s calling 2nd ucx_wait_request_mt; %d\n", __FUNCTION__, getpid());
+//                     opal_common_ucx_wait_request_mt(winfo->inflight_req, "opal_common_ucx_flush");
+//                     winfo->inflight_req = UCS_OK;
+//                 }
+//                 winfo->global_inflight_ops -= ep_iop->inflight_ops;
+//                 ep_iop->inflight_ops = 0;
+//                 do {
+//                     progress = ucp_worker_progress(winfo->worker);
+//                     i++;
+//                 } while (progress);
+//                 printf ("Called progress %d times\n", i);
+//             }
+
             ucp_ep_destroy(ep_iop->endpoint);
             ep_iop->inflight_ops = 0;
             free(ep_iop);
@@ -113,7 +169,8 @@ _winfo_destructor(opal_common_ucx_winfo_t *winfo)
     opal_hash_table_remove_all(&winfo->ep_iops);
     OBJ_DESTRUCT(&winfo->ep_iops);
     OBJ_DESTRUCT(&winfo->mutex);
-    ucp_worker_destroy(winfo->worker);
+
+//     ucp_worker_destroy(winfo->worker);
 }
 
 /* -----------------------------------------------------------------------------
@@ -240,15 +297,20 @@ opal_common_ucx_wpool_init(opal_common_ucx_wpool_t *wpool,
     /* create recv worker and add to idle pool */
     OBJ_CONSTRUCT(&wpool->idle_workers, opal_list_t);
     OBJ_CONSTRUCT(&wpool->active_workers, opal_list_t);
+    OBJ_CONSTRUCT(&wpool->released_workers, opal_pointer_array_t);
+    if (OPAL_SUCCESS != opal_pointer_array_init(&wpool->released_workers, 8, INT_MAX, 16) ) {
+        goto err_ucp_init;
+    }
 
     winfo = _winfo_create(wpool);
+    printf ("(%d) %s Creating dflt winfo %p -> worker %p\n", getpid(), __FUNCTION__, winfo, &winfo->worker);
     if (NULL == winfo) {
         MCA_COMMON_UCX_ERROR("Failed to create receive worker");
         rc = OPAL_ERROR;
         goto err_worker_create;
     }
     wpool->dflt_worker = winfo->worker;
-
+    
     status = ucp_worker_get_address(wpool->dflt_worker,
                                     &wpool->worker_addr.addr, &wpool->worker_addr.len);
     if (status != UCS_OK) {
@@ -257,6 +319,7 @@ opal_common_ucx_wpool_init(opal_common_ucx_wpool_t *wpool,
         goto err_get_addr;
     }
 
+    printf ("(%d) %s Putting winfo %p -> worker %p to idle_workers\n", getpid(), __FUNCTION__, winfo, &winfo->worker);
     rc = _wpool_list_put(&wpool->idle_workers, winfo);
     if (rc) {
         goto err_wpool_add;
@@ -280,6 +343,7 @@ err_get_addr:
 OPAL_DECLSPEC
 void opal_common_ucx_wpool_finalize(opal_common_ucx_wpool_t *wpool)
 {
+    int i = 0;
     wpool->refcnt--;
     if (wpool->refcnt > 0) {
         return;
@@ -295,6 +359,8 @@ void opal_common_ucx_wpool_finalize(opal_common_ucx_wpool_t *wpool)
         OPAL_LIST_FOREACH_SAFE(winfo, next, &wpool->idle_workers,
                                opal_common_ucx_winfo_t) {
             opal_list_remove_item(&wpool->idle_workers, &winfo->super);
+            printf ("(%d) %s Adding idle winfo %p -> worker %p to ptr array\n", getpid(), __FUNCTION__, winfo, &winfo->worker);
+            opal_pointer_array_add(&wpool->released_workers, &winfo->worker);
             OBJ_RELEASE(winfo);
         }
     }
@@ -302,18 +368,42 @@ void opal_common_ucx_wpool_finalize(opal_common_ucx_wpool_t *wpool)
 
     /* Release active workers. They are no longer active actually
      * because opal_common_ucx_wpool_finalize is being called. */
+    i = 0;
     if (!opal_list_is_empty(&wpool->active_workers)) {
         opal_common_ucx_winfo_t *winfo, *next;
         OPAL_LIST_FOREACH_SAFE(winfo, next, &wpool->active_workers,
                                opal_common_ucx_winfo_t) {
             opal_list_remove_item(&wpool->active_workers, &winfo->super);
+            printf ("(%d) %s Adding active winfo %p -> worker %p to ptr array\n", getpid(), __FUNCTION__, winfo, &winfo->worker);
+            opal_pointer_array_add(&wpool->released_workers, &winfo->worker);
             OBJ_RELEASE(winfo);
         }
     }
     OBJ_DESTRUCT(&wpool->active_workers);
 
     OBJ_DESTRUCT(&wpool->mutex);
+
+    /* Fence */
+    if (OPAL_SUCCESS != PMIx_Fence(NULL, 0, NULL, 0 )) {
+        printf ("PMIx_Fence failed!\n");
+        return;
+    }
+
+    /* Destroy released workers */
+    for (i = 0; i < opal_pointer_array_get_size(&wpool->released_workers); i++) {
+        ucp_worker_h *worker = opal_pointer_array_get_item(&wpool->released_workers, i);
+        if (NULL == worker) {
+            break;
+        }
+        printf ("destroying worker %p\n", worker);
+        ucp_worker_destroy(*worker); 
+    }
     ucp_cleanup(wpool->ucp_ctx);
+   
+    OBJ_DESTRUCT(&wpool->released_workers);
+
+//     printf ("At %s, pid = %d\n", __FUNCTION__, getpid());
+//     sleep(15);
     return;
 }
 
@@ -373,6 +463,7 @@ _wpool_get_winfo(opal_common_ucx_wpool_t *wpool)
     winfo = _wpool_list_get(wpool, &wpool->idle_workers);
     if (!winfo) {
         winfo = _winfo_create(wpool);
+        printf ("(%d) %s Created winfo %p -> worker %p\n", getpid(), __FUNCTION__, winfo, &winfo->worker);
         if (!winfo) {
             MCA_COMMON_UCX_ERROR("Failed to allocate worker info structure");
             opal_mutex_unlock(&wpool->mutex);
@@ -381,6 +472,7 @@ _wpool_get_winfo(opal_common_ucx_wpool_t *wpool)
     }
 
     /* Put the worker on the active list */
+    printf ("(%d) %s Putting idle winfo %p -> worker %p to active\n", getpid(), __FUNCTION__, winfo, &winfo->worker);
     _wpool_list_put(&wpool->active_workers, winfo);
 
     opal_mutex_unlock(&wpool->mutex);
@@ -934,6 +1026,7 @@ opal_common_ucx_wpmem_flush(opal_common_ucx_wpmem_t *mem,
         opal_mutex_lock(&winfo->mutex);
         ret = opal_hash_table_get_value_uint64(&winfo->ep_iops, proc_vpid, (void **) &ep_iop);
         if (OPAL_SUCCESS != ret) {
+            opal_mutex_unlock(&winfo->mutex);
             continue;
         }
         rc = opal_common_ucx_winfo_flush(winfo, ep_iop->endpoint, OPAL_COMMON_UCX_FLUSH_B,

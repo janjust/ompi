@@ -199,12 +199,16 @@ static int component_init(bool enable_progress_threads, bool enable_mpi_threads)
 }
 
 static int component_finalize(void) {
+    printf ("At %s START, pid = %d\n", __FUNCTION__, getpid());
+    sleep(10);
     opal_common_ucx_mca_deregister();
     if (mca_osc_ucx_component.env_initialized) {
         opal_common_ucx_wpctx_release(mca_osc_ucx_component.wpctx);
         opal_common_ucx_wpool_finalize(mca_osc_ucx_component.wpool);
     }
     opal_common_ucx_wpool_free(mca_osc_ucx_component.wpool);
+    printf ("At %s END, pid = %d\n", __FUNCTION__, getpid());
+//     sleep(10);
     return OMPI_SUCCESS;
 }
 

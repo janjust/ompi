@@ -59,7 +59,7 @@ typedef struct {
 typedef struct {
     /* Ref counting & locking*/
     int refcnt;
-    opal_mutex_t mutex;
+    opal_recursive_mutex_t mutex;
 
     /* UCX data */
     ucp_context_h ucp_ctx;
@@ -69,6 +69,7 @@ typedef struct {
     /* Bookkeeping information */
     opal_list_t idle_workers;
     opal_list_t active_workers;
+    opal_pointer_array_t released_workers;
 
     /* UCX addressing information */
     wpool_worker_addr_tbl_t *addrs_tbl;
@@ -360,6 +361,7 @@ static inline int _periodical_flush_nb(opal_common_ucx_wpmem_t *mem,
 
     if (OPAL_UNLIKELY(ep_iop->inflight_ops >= MCA_COMMON_UCX_PER_TARGET_OPS_THRESHOLD) ||
         OPAL_UNLIKELY(winfo->global_inflight_ops >= MCA_COMMON_UCX_GLOBAL_OPS_THRESHOLD)) {
+        printf ("%d %s winfo %p -> worker %p\n", getpid(), __FUNCTION__, winfo, &winfo->worker);
         opal_common_ucx_flush_scope_t scope;
 
         if (winfo->inflight_req != UCS_OK) {
