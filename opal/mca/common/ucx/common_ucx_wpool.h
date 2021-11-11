@@ -401,7 +401,7 @@ static inline int opal_common_ucx_wpmem_cmpswp(opal_common_ucx_wpmem_t *mem, uin
     ucp_ep_h ep;
     ucp_rkey_h rkey;
     opal_common_ucx_winfo_t *winfo = NULL;
-    ucs_status_t status;
+    opal_common_ucx_request_t *req;
     int rc = OPAL_SUCCESS;
 
     rc = opal_common_ucx_tlocal_fetch(mem, target, &ep, &rkey, &winfo);
@@ -412,10 +412,12 @@ static inline int opal_common_ucx_wpmem_cmpswp(opal_common_ucx_wpmem_t *mem, uin
 
     /* Perform the operation */
     opal_mutex_lock(&winfo->mutex);
-    status = opal_common_ucx_atomic_cswap(ep, compare, value, buffer, len, rem_addr, rkey,
-                                          winfo->worker);
-    if (OPAL_UNLIKELY(status != UCS_OK)) {
-        MCA_COMMON_UCX_ERROR("opal_common_ucx_atomic_cswap failed: %d", status);
+    req = opal_common_ucx_atomic_cswap_nb(ep, compare, value, buffer, len, rem_addr, rkey,
+                                          opal_common_ucx_req_completion, winfo->worker);
+    req->winfo = winfo;
+    rc = opal_common_ucx_wait_request_mt(req, "ucp_atomic_cswap");
+    if (OPAL_UNLIKELY(rc != OPAL_SUCCESS)) {
+        MCA_COMMON_UCX_ERROR("opal_common_ucx_atomic_cswap failed: %d", rc);
         rc = OPAL_ERROR;
         goto out;
     }
@@ -518,7 +520,7 @@ static inline int opal_common_ucx_wpmem_fetch(opal_common_ucx_wpmem_t *mem,
     ucp_ep_h ep = NULL;
     ucp_rkey_h rkey = NULL;
     opal_common_ucx_winfo_t *winfo = NULL;
-    ucs_status_t status;
+    opal_common_ucx_request_t *req;
     int rc = OPAL_SUCCESS;
 
     rc = opal_common_ucx_tlocal_fetch(mem, target, &ep, &rkey, &winfo);
@@ -529,10 +531,12 @@ static inline int opal_common_ucx_wpmem_fetch(opal_common_ucx_wpmem_t *mem,
 
     /* Perform the operation */
     opal_mutex_lock(&winfo->mutex);
-    status = opal_common_ucx_atomic_fetch(ep, opcode, value, buffer, len, rem_addr, rkey,
-                                          winfo->worker);
-    if (OPAL_UNLIKELY(status != UCS_OK)) {
-        MCA_COMMON_UCX_ERROR("ucp_atomic_cswap64 failed: %d", status);
+    req = opal_common_ucx_atomic_fetch_nb(ep, opcode, value, buffer, len, rem_addr, rkey,
+                                          opal_common_ucx_req_completion, winfo->worker);
+    req->winfo = winfo;
+    rc = opal_common_ucx_wait_request_mt(req, "ucp_atomic_fetch");
+    if (OPAL_UNLIKELY(OPAL_SUCCESS != rc)) {
+        MCA_COMMON_UCX_ERROR("ucp_atomic_fetch failed: %d", rc);
         rc = OPAL_ERROR;
         goto out;
     }
