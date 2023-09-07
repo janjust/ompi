@@ -121,9 +121,9 @@ static int mca_coll_ucc_save_coll_handlers(mca_coll_ucc_module_t *ucc_module)
 */
 static int ucc_comm_attr_del_fn(MPI_Comm comm, int keyval, void *attr_val, void *extra)
 {
-
     mca_coll_ucc_module_t *ucc_module = (mca_coll_ucc_module_t*) attr_val;
-    ucc_team_destroy(ucc_module->ucc_team);
+    ucc_status_t status;
+    while(UCC_INPROGRESS == (status = ucc_team_destroy(ucc_module->ucc_team))) {}
     if (ucc_module->comm == &ompi_mpi_comm_world.comm) {
         if (mca_coll_ucc_component.libucc_initialized) {
             UCC_VERBOSE(1,"finalizing ucc library");
@@ -131,6 +131,10 @@ static int ucc_comm_attr_del_fn(MPI_Comm comm, int keyval, void *attr_val, void 
             ucc_context_destroy(mca_coll_ucc_component.ucc_context);
             ucc_finalize(mca_coll_ucc_component.ucc_lib);
         }
+    }
+    if (UCC_OK != status) {
+        UCC_ERROR("UCC team destroy failed");
+        return OMPI_ERROR;
     }
     return OMPI_SUCCESS;
 }
@@ -511,7 +515,7 @@ int mca_coll_ucc_req_free(struct ompi_request_t **ompi_req)
 {
     opal_free_list_return (&mca_coll_ucc_component.requests,
                            (opal_free_list_item_t *)(*ompi_req));
-    *ompi_req = &ompi_request_empty;
+    *ompi_req = MPI_REQUEST_NULL;
     return OMPI_SUCCESS;
 }
 

@@ -8,7 +8,7 @@ Copyright (c) 2004-2008 High Performance Computing Center Stuttgart,
                         University of Stuttgart.  All rights reserved.
 Copyright (c) 2004-2006 The Regents of the University of California.
                         All rights reserved.
-Copyright (c) 2006-2022 Cisco Systems, Inc.  All rights reserved.
+Copyright (c) 2006-2023 Cisco Systems, Inc.  All rights reserved.
 Copyright (c) 2006      Voltaire, Inc. All rights reserved.
 Copyright (c) 2006      Sun Microsystems, Inc.  All rights reserved.
                         Use is subject to license terms.
@@ -25,6 +25,7 @@ Copyright (c) 2018-2022 Amazon.com, Inc. or its affiliates.  All Rights
 Copyright (c) 2019-2021 Triad National Security, LLC. All rights
                         reserved.
 Copyright (c) 2021      Google, LLC. All rights reserved.
+Copyright (c) 2023      Jeffrey M. Squyres.  All rights reserved.
 $COPYRIGHT$
 
 Additional copyrights may follow
@@ -58,16 +59,44 @@ included in the vX.Y.Z section and be denoted as:
    (** also appeared: A.B.C)  -- indicating that this item was previously
                                  included in release version vA.B.C.
 
-4.1.5 -- November, 2022
+4.1.6 -- August, 2023
+---------------------
+
+- Add missing MPI_F_STATUS_SIZE to mpi.h.  Thanks to @jprotze for
+  reporting the issue.
+- Update Fortran mpi module configure check to be more correct.
+  Thanks to Sergey Kosukhin for identifying the issue and supplying
+  the fix.
+- Update to properly handle PMIx v>=4.2.3.  Thanks to Bruno Chareyre,
+  Github user @sukanka, and Christof Koehler for raising the
+  compatibility issues and helping test the fixes.
+- Fix minor issues and add some minor performance optimizations with
+  OFI support.
+- Support the "striping_factor" and "striping_unit" MPI_Info names
+  recomended by the MPI standard for parallel IO.
+- Fixed some minor issues with UCX support.
+- Minor optimization for 0-byte MPI_Alltoallw (i.e., make it a no-op).
+
+
+4.1.5 -- February, 2023
 -----------------------
 
+- Fix crash in one-sided applications for certain process layouts.
+- Update embedded OpenPMIx to version 3.2.4
 - Fix issue building with ifort on MacOS.
 - Backport patches to Libevent for CVE-2016-10195, CVE-2016-10196, and
   CVE-2016-10197.  Note that Open MPI's internal libevent does not
   use the impacted portions of the Libevent code base.
-- Fix initializer bugs in SHMEM interface.
-- Fix UCX memory registration bug that could occur when UCX was built
-  but not selected.
+- SHMEM improvements:
+  - Fix initializer bugs in SHMEM interface.
+  - Fix unsigned type comparisons generating warnings.
+  - Fix use after clear issue in shmem_ds_reset.
+- UCX improvements
+  - Fix memory registration bug that could occur when UCX was built
+    but not selected.
+  - Reduce overhead of add_procs with intercommunicators.
+  - Enable multi_send_nb by default.
+  - Call opal_progress while waiting for a UCX fence to complete.
 - Fix data corruption bug in osc/rdma component.
 - Fix overflow bug in alltoall collective
 - Fix crash when displaying topology.

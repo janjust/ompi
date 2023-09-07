@@ -4,8 +4,8 @@
  *                         reserved.
  * Copyright (c) 2019-2020 Triad National Security, LLC. All rights
  *                         reserved.
- * Copyright (c) 2018-2020 Amazon.com, Inc. or its affiliates. All rights
- *                         reserved.
+ * Copyright (c)           Amazon.com, Inc. or its affiliates.
+ *                         All Rights reserved.
  * Copyright (c) 2021      The University of Tennessee and The University
  *                         of Tennessee Research Foundation.  All rights
  *                         reserved.
@@ -612,6 +612,41 @@ ompi_mtl_ofi_isend_generic(struct mca_mtl_base_module_t *mtl,
             goto free_request_buffer;
     }
 
+    if (ompi_mtl_ofi.max_inject_size >= length) {
+        if (ofi_cq_data) {
+            ret = fi_tinjectdata(ompi_mtl_ofi.ofi_ctxt[ctxt_id].tx_ep,
+                    start,
+                    length,
+                    comm->c_my_rank,
+                    sep_peer_fiaddr,
+                    match_bits);
+        } else {
+            ret = fi_tinject(ompi_mtl_ofi.ofi_ctxt[ctxt_id].tx_ep,
+                    start,
+                    length,
+                    sep_peer_fiaddr,
+                    match_bits);
+        }
+
+        if(OPAL_LIKELY(ret == 0)) {
+            ofi_req->event_callback(NULL, ofi_req);
+            return ofi_req->status.MPI_ERROR;
+        } else if(ret != -FI_EAGAIN) {
+            MTL_OFI_LOG_FI_ERR(ret,
+                               ofi_cq_data ? "fi_tinjectdata failed"
+                               : "fi_tinject failed");
+            if (ack_req) {
+                fi_cancel((fid_t)ompi_mtl_ofi.ofi_ctxt[ctxt_id].tx_ep, &ack_req->ctx);
+                free(ack_req);
+            }
+            ofi_req->status.MPI_ERROR = ompi_mtl_ofi_get_error(ret);
+            ofi_req->event_callback(NULL, ofi_req);
+            return ofi_req->status.MPI_ERROR;
+        }
+        /* otherwise fall back to the standard fi_tsend path */
+    }
+
+
     if (ofi_cq_data) {
         MTL_OFI_RETRY_UNTIL_DONE(fi_tsenddata(ompi_mtl_ofi.ofi_ctxt[ctxt_id].tx_ep,
                                       start,
@@ -660,6 +695,7 @@ ompi_mtl_ofi_recv_callback(struct fi_cq_tagged_entry *wc,
     int src = mtl_ofi_get_source(wc);
     ompi_status_public_t *status = NULL;
     struct fi_msg_tagged tagged_msg;
+    struct iovec d_iovec = {.iov_base = NULL, .iov_len = 0};
 
     ctxt_id = ompi_mtl_ofi_map_comm_to_ctxt(ofi_req->comm->c_contextid);
 
@@ -728,9 +764,9 @@ ompi_mtl_ofi_recv_callback(struct fi_cq_tagged_entry *wc,
             ofi_req->remote_addr = fi_rx_addr(endpoint->peer_fiaddr, ctxt_id, ompi_mtl_ofi.rx_ctx_bits);
         }
 
-        tagged_msg.msg_iov = NULL;
+        tagged_msg.msg_iov = &d_iovec;
         tagged_msg.desc = NULL;
-        tagged_msg.iov_count = 0;
+        tagged_msg.iov_count = 1;
         tagged_msg.addr = ofi_req->remote_addr;
         /**
         * We must continue to use the user's original tag but remove the
