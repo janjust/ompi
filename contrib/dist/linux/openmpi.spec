@@ -154,10 +154,11 @@
 # type: bool (0/1)
 %{!?allow_fortify_source: %define allow_fortify_source 1}
 
-# Select md5 packing algorithm, that src.rpm created on one distro can
-# be read on another.
-%global _binary_filedigest_algorithm 1
-%global _source_filedigest_algorithm 1
+# W/A for https://redmine.mellanox.com/issues/3545375
+## Select md5 packing algorithm, that src.rpm created on one distro can
+## be read on another.
+#%global _binary_filedigest_algorithm 1
+#%global _source_filedigest_algorithm 1
 
 # Define this to 1 if you want to keep libtool archive files
 # Default is 0 (remove *.la files)
