@@ -222,6 +222,7 @@
 
 Summary: A powerful implementation of MPI/SHMEM
 Name: %{?_name:%{_name}}%{!?_name:openmpi}
+Epoch: %{?epoch:%{epoch}}%{!?epoch:3}
 Version: $VERSION
 Release: 1%{?dist}
 License: BSD
