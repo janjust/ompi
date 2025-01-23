@@ -137,7 +137,7 @@ libmpi_usempif08_so_version=70:1:30
 libopen_rte_so_version=70:4:30
 libopen_pal_so_version=70:4:30
 libmpi_java_so_version=70:0:30
-liboshmem_so_version=70:4:31
+liboshmem_so_version=70:4:30
 libompitrace_so_version=70:1:30
 
 # "Common" components install standalone libraries that are run-time
