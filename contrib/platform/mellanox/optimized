@@ -1,5 +1,5 @@
 enable_mca_no_build=btl-uct,coll-han,coll-adapt
-enable_mca_dso=coll-ucc,coll-hcoll
+enable_mca_dso=coll-ucc,coll-hcoll,cache_rgpusm,cache_gpusm,btl_smcuda,accelerator_cuda,coll_cuda
 enable_debug_symbols=yes
 enable_mpirun_prefix_by_default=yes
 with_devel_headers=yes
