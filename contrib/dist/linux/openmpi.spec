@@ -244,6 +244,8 @@ Requires: %{modules_rpm_name}
 %if %{use_mpi_selector}
 Requires: %{mpi_selector_rpm_name}
 %endif
+Requires: ucx
+Requires: hcoll
 
 %description
 Open MPI is an open source implementation of the Message Passing
