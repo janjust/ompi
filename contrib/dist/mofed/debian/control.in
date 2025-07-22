@@ -5,7 +5,7 @@ Homepage: http://www.open-mpi.org/
 Maintainer:  http://www.open-mpi.org
 
 Package: openmpi
-Depends: ${shlibs:Depends}, ${misc:Depends}
+Depends: ${shlibs:Depends}, ${misc:Depends}, ucx, hcoll
 Architecture: all
 Description: Open MPI
  Open MPI is a project combining technologies and resources from
