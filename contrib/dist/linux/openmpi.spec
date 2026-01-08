@@ -243,6 +243,7 @@
 
 Summary: A powerful implementation of MPI/SHMEM
 Name: %{?_name:%{_name}}%{!?_name:openmpi}
+Epoch: %{?epoch:%{epoch}}%{!?epoch:3}
 Version: $VERSION
 Release: 1%{?dist}
 License: BSD
@@ -270,6 +271,7 @@ Requires: %{modules_rpm_name}
 %if %{use_mpi_selector}
 Requires: %{mpi_selector_rpm_name}
 %endif
+Requires: ucx
 
 %description
 Open MPI is an open source implementation of the Message Passing
