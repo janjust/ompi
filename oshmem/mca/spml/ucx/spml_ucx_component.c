@@ -25,6 +25,7 @@
 
 #include "opal/util/opal_environ.h"
 #include "opal/runtime/opal_progress_threads.h"
+#include "opal/mca/pmix/pmix-internal.h"
 
 static int mca_spml_ucx_component_register(void);
 static int mca_spml_ucx_component_open(void);
@@ -464,9 +465,13 @@ static void mca_spml_ucx_ctx_fini(mca_spml_ucx_ctx_t *ctx)
     }
 }
 
+static void mca_spml_ucx_fence_complete_cb(int status, void *fenced)
+{
+    *(volatile int *) fenced = 1;
+}
+
 static int mca_spml_ucx_component_fini(void)
 {
-    volatile int fenced = 0;
     int i;
     int ret = OSHMEM_SUCCESS;
 
@@ -497,29 +502,41 @@ static int mca_spml_ucx_component_fini(void)
         _ctx_cleanup(mca_spml_ucx.idle_array.ctxs[i]);
     }
 
-
-    ret = opal_common_ucx_mca_pmix_fence_nb(&fenced);
-    if (ret != PMIX_SUCCESS) {
-        SPML_UCX_WARN("pmix fence failed: %s", PMIx_Error_string(ret));
-        /* In case of pmix fence failure just continue cleanup */
-        fenced = 1;
-    }
-
-    while (!fenced) {
-        for (i = 0; i < mca_spml_ucx.active_array.ctxs_count; i++) {
-            ucp_worker_progress(mca_spml_ucx.active_array.ctxs[i]->ucp_worker[0]);
+    /* Start non-blocking fence - we need to progress all workers before teardown */
+    {
+        volatile int fenced = 0;
+        ret = PMIx_Fence_nb(NULL, 0, NULL, 0, mca_spml_ucx_fence_complete_cb, (void *) &fenced);
+        if (ret != PMIX_SUCCESS) {
+            SPML_UCX_WARN("pmix fence failed: %s", PMIx_Error_string(ret));
+            /* In case of pmix fence failure just continue cleanup */
+            fenced = 1;
         }
 
-        for (i = 0; i < mca_spml_ucx.idle_array.ctxs_count; i++) {
-            ucp_worker_progress(mca_spml_ucx.idle_array.ctxs[i]->ucp_worker[0]);
-        }
-        
-        for (i = 0; i < (signed int)mca_spml_ucx.ucp_workers; i++) {
-            ucp_worker_progress(mca_spml_ucx_ctx_default.ucp_worker[i]);
-        }
+        /* Progress all workers to flush pending operations and call opal_progress 
+         * to allow PMIx callback to fire */
+        while (!fenced) {
+            /* Progress all active context workers */
+            for (i = 0; i < mca_spml_ucx.active_array.ctxs_count; i++) {
+                ucp_worker_progress(mca_spml_ucx.active_array.ctxs[i]->ucp_worker[0]);
+            }
 
-        if (mca_spml_ucx.aux_ctx != NULL) {
-            ucp_worker_progress(mca_spml_ucx.aux_ctx->ucp_worker[0]);
+            /* Progress all idle context workers */
+            for (i = 0; i < mca_spml_ucx.idle_array.ctxs_count; i++) {
+                ucp_worker_progress(mca_spml_ucx.idle_array.ctxs[i]->ucp_worker[0]);
+            }
+            
+            /* Progress all default context workers */
+            for (i = 0; i < (signed int)mca_spml_ucx.ucp_workers; i++) {
+                ucp_worker_progress(mca_spml_ucx_ctx_default.ucp_worker[i]);
+            }
+
+            /* Progress auxiliary context worker if it exists */
+            if (mca_spml_ucx.aux_ctx != NULL) {
+                ucp_worker_progress(mca_spml_ucx.aux_ctx->ucp_worker[0]);
+            }
+
+            /* Call opal_progress() to allow PMIx event library to cycle and fire callback */
+            opal_progress();
         }
     }
 
