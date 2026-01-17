@@ -281,14 +281,21 @@ int ompi_mpi_finalize(void)
          * communications/actions to complete.  See
          * https://github.com/open-mpi/ompi/issues/1576 for the
          * original bug report. */
-        if (PMIX_SUCCESS != (rc = PMIx_Fence_nb(NULL, 0, NULL, 0, fence_cbfunc, (void*)&active))) {
+        rc = PMIx_Fence_nb(NULL, 0, NULL, 0, fence_cbfunc, (void*)&active);
+        if (PMIX_OPERATION_SUCCEEDED == rc) {
+            /* Fence completed atomically, callback will not be invoked by PMIx.
+             * Call it explicitly to maintain contract */
+            fence_cbfunc(PMIX_SUCCESS, (void*)&active);
+        } else if (PMIX_SUCCESS != rc) {
             ret = opal_pmix_convert_status(rc);
             OMPI_ERROR_LOG(ret);
             /* Reset the active flag to false, to avoid waiting for
              * completion when the fence was failed. */
             active = false;
         }
-        OMPI_LAZY_WAIT_FOR_COMPLETION(active);
+        if (active) {
+            OMPI_LAZY_WAIT_FOR_COMPLETION(active);
+        }
     }
 
     ompi_mpi_instance_finalize (&ompi_mpi_instance_default);

@@ -464,9 +464,12 @@ int ompi_mpi_init(int argc, char **argv, int requested, int *provided,
                 active = true;
                 OPAL_POST_OBJECT(&active);
                 PMIX_INFO_LOAD(&info[0], PMIX_COLLECT_DATA, &opal_pmix_collect_all_data, PMIX_BOOL);
-                if( PMIX_SUCCESS != (rc = PMIx_Fence_nb(NULL, 0, NULL, 0,
-                                                        fence_release,
-                                                        (void*)&active))) {
+                rc = PMIx_Fence_nb(NULL, 0, NULL, 0, fence_release, (void*)&active);
+                if (PMIX_OPERATION_SUCCEEDED == rc) {
+                    /* Fence completed atomically, callback will not be invoked by PMIx.
+                     * Call it explicitly to maintain contract */
+                    fence_release(PMIX_SUCCESS, (void*)&active);
+                } else if (PMIX_SUCCESS != rc) {
                     ret = opal_pmix_convert_status(rc);
                     error = "PMIx_Fence_nb() failed";
                     goto error;
@@ -481,13 +484,19 @@ int ompi_mpi_init(int argc, char **argv, int requested, int *provided,
             OPAL_POST_OBJECT(&active);
             PMIX_INFO_LOAD(&info[0], PMIX_COLLECT_DATA, &opal_pmix_collect_all_data, PMIX_BOOL);
             rc = PMIx_Fence_nb(NULL, 0, info, 1, fence_release, (void*)&active);
-            if( PMIX_SUCCESS != rc) {
+            if (PMIX_OPERATION_SUCCEEDED == rc) {
+                /* Fence completed atomically, callback will not be invoked by PMIx.
+                 * Call it explicitly to maintain contract */
+                fence_release(PMIX_SUCCESS, (void*)&active);
+            } else if (PMIX_SUCCESS != rc) {
                 ret = opal_pmix_convert_status(rc);
-                error = "PMIx_Fence() failed";
+                error = "PMIx_Fence_nb() failed";
                 goto error;
             }
             /* cannot just wait on thread as we need to call opal_progress */
-            OMPI_LAZY_WAIT_FOR_COMPLETION(active);
+            if (active) {
+                OMPI_LAZY_WAIT_FOR_COMPLETION(active);
+            }
         }
     }
 
@@ -537,7 +546,9 @@ int ompi_mpi_init(int argc, char **argv, int requested, int *provided,
          * we have to wait here for it to complete. However, there
          * is no reason to do two barriers! */
         if (background_fence) {
-            OMPI_LAZY_WAIT_FOR_COMPLETION(active);
+            if (active) {
+                OMPI_LAZY_WAIT_FOR_COMPLETION(active);
+            }
         } else if (!ompi_async_mpi_init) {
             /* wait for everyone to reach this point - this is a hard
              * barrier requirement at this time, though we hope to relax
@@ -546,13 +557,19 @@ int ompi_mpi_init(int argc, char **argv, int requested, int *provided,
             active = true;
             OPAL_POST_OBJECT(&active);
             PMIX_INFO_LOAD(&info[0], PMIX_COLLECT_DATA, &flag, PMIX_BOOL);
-            if (PMIX_SUCCESS != (rc = PMIx_Fence_nb(NULL, 0, info, 1,
-                                                    fence_release, (void*)&active))) {
+            rc = PMIx_Fence_nb(NULL, 0, info, 1, fence_release, (void*)&active);
+            if (PMIX_OPERATION_SUCCEEDED == rc) {
+                /* Fence completed atomically, callback will not be invoked by PMIx.
+                 * Call it explicitly to maintain contract */
+                fence_release(PMIX_SUCCESS, (void*)&active);
+            } else if (PMIX_SUCCESS != rc) {
                 ret = opal_pmix_convert_status(rc);
                 error = "PMIx_Fence_nb() failed";
                 goto error;
             }
-            OMPI_LAZY_WAIT_FOR_COMPLETION(active);
+            if (active) {
+                OMPI_LAZY_WAIT_FOR_COMPLETION(active);
+            }
         }
     }
 
