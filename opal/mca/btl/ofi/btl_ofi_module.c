@@ -143,6 +143,14 @@ static int mca_btl_ofi_del_procs(mca_btl_base_module_t *btl, size_t nprocs, opal
     return OPAL_SUCCESS;
 }
 
+static int mca_btl_ofi_register_error(mca_btl_base_module_t *btl,
+                                      mca_btl_base_module_error_cb_fn_t cb)
+{
+    mca_btl_ofi_module_t *ofi_btl = (mca_btl_ofi_module_t *) btl;
+    ofi_btl->ofi_error_cb = cb;
+    return OPAL_SUCCESS;
+}
+
 void mca_btl_ofi_rcache_init(mca_btl_ofi_module_t *module)
 {
     if (!module->initialized) {
@@ -380,11 +388,11 @@ int mca_btl_ofi_finalize(mca_btl_base_module_t *btl)
     }
 
     if (NULL != ofi_btl->domain) {
-        fi_close(&ofi_btl->domain->fid);
+        opal_common_ofi_domain_release(ofi_btl->domain);
     }
 
     if (NULL != ofi_btl->fabric) {
-        fi_close(&ofi_btl->fabric->fid);
+        opal_common_ofi_fabric_release(ofi_btl->fabric);
     }
 
     if (NULL != ofi_btl->fabric_info) {
@@ -510,4 +518,5 @@ mca_btl_ofi_module_t mca_btl_ofi_module_template = {
         .btl_add_procs = mca_btl_ofi_add_procs,
         .btl_del_procs = mca_btl_ofi_del_procs,
         .btl_finalize = mca_btl_ofi_finalize,
+        .btl_register_error = mca_btl_ofi_register_error,
     }};
