@@ -28,10 +28,10 @@ BEGIN_C_DECLS
                       UCC_COLL_TYPE_ALLREDUCE | UCC_COLL_TYPE_ALLTOALL | \
                       UCC_COLL_TYPE_ALLTOALLV | UCC_COLL_TYPE_ALLGATHER | \
                       UCC_COLL_TYPE_REDUCE    | UCC_COLL_TYPE_ALLGATHERV | \
-                      UCC_COLL_TYPE_REDUCE_SCATTER)
+                      UCC_COLL_TYPE_REDUCE_SCATTER | UCC_COLL_TYPE_REDUCE_SCATTERV)
 
-#define COLL_UCC_CTS_STR "barrier,bcast,allreduce,alltoall,alltoallv,allgather,allgatherv,reduce,reduce_scatter_block," \
-                         "ibarrier,ibcast,iallreduce,ialltoall,ialltoallv,iallgather,iallgatherv,ireduce,ireduce_scatter_block"
+#define COLL_UCC_CTS_STR "barrier,bcast,allreduce,alltoall,alltoallv,allgather,allgatherv,reduce,reduce_scatter_block,reduce_scatter," \
+                         "ibarrier,ibcast,iallreduce,ialltoall,ialltoallv,iallgather,iallgatherv,ireduce,ireduce_scatter_block,ireduce_scatter"
 
 typedef struct mca_coll_ucc_req {
     ompi_request_t super;
@@ -105,6 +105,10 @@ struct mca_coll_ucc_module_t {
     mca_coll_base_module_t*                         previous_reduce_scatter_block_module;
     mca_coll_base_module_ireduce_scatter_block_fn_t previous_ireduce_scatter_block;
     mca_coll_base_module_t*                         previous_ireduce_scatter_block_module;
+    mca_coll_base_module_reduce_scatter_fn_t        previous_reduce_scatter;
+    mca_coll_base_module_t*                         previous_reduce_scatter_module;
+    mca_coll_base_module_ireduce_scatter_fn_t       previous_ireduce_scatter;
+    mca_coll_base_module_t*                         previous_ireduce_scatter_module;
 };
 typedef struct mca_coll_ucc_module_t mca_coll_ucc_module_t;
 OBJ_CLASS_DECLARATION(mca_coll_ucc_module_t);
@@ -212,6 +216,19 @@ int mca_coll_ucc_ireduce_scatter_block(const void *sbuf, void *rbuf, int rcount,
                                        struct ompi_communicator_t *comm,
                                        ompi_request_t** request,
                                        mca_coll_base_module_t *module);
+
+int mca_coll_ucc_reduce_scatter(const void *sbuf, void *rbuf, const int *rcounts,
+                                struct ompi_datatype_t *dtype,
+                                struct ompi_op_t *op,
+                                struct ompi_communicator_t *comm,
+                                mca_coll_base_module_t *module);
+
+int mca_coll_ucc_ireduce_scatter(const void *sbuf, void *rbuf, const int *rcounts,
+                                 struct ompi_datatype_t *dtype,
+                                 struct ompi_op_t *op,
+                                 struct ompi_communicator_t *comm,
+                                 ompi_request_t** request,
+                                 mca_coll_base_module_t *module);
 
 END_C_DECLS
 #endif

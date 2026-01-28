@@ -27,7 +27,8 @@ coll_ucc_sources =            \
 		coll_ucc_alltoallv.c  \
 		coll_ucc_allgather.c  \
 		coll_ucc_allgatherv.c \
-		coll_ucc_reduce_scatter_block.c
+		coll_ucc_reduce_scatter_block.c \
+		coll_ucc_reduce_scatter.c
 
 # Make the output library in this directory, and name it either
 # mca_<type>_<name>.la (for DSO builds) or libmca_<type>_<name>.la

@@ -52,6 +52,10 @@ static void mca_coll_ucc_module_clear(mca_coll_ucc_module_t *ucc_module)
     ucc_module->previous_reduce_scatter_block_module  = NULL;
     ucc_module->previous_ireduce_scatter_block        = NULL;
     ucc_module->previous_ireduce_scatter_block_module = NULL;
+    ucc_module->previous_reduce_scatter               = NULL;
+    ucc_module->previous_reduce_scatter_module        = NULL;
+    ucc_module->previous_ireduce_scatter              = NULL;
+    ucc_module->previous_ireduce_scatter_module       = NULL;
 }
 
 static void mca_coll_ucc_module_construct(mca_coll_ucc_module_t *ucc_module)
@@ -90,6 +94,8 @@ static void mca_coll_ucc_module_destruct(mca_coll_ucc_module_t *ucc_module)
     OBJ_RELEASE_IF_NOT_NULL(ucc_module->previous_ireduce_module);
     OBJ_RELEASE_IF_NOT_NULL(ucc_module->previous_reduce_scatter_block_module);
     OBJ_RELEASE_IF_NOT_NULL(ucc_module->previous_ireduce_scatter_block_module);
+    OBJ_RELEASE_IF_NOT_NULL(ucc_module->previous_reduce_scatter_module);
+    OBJ_RELEASE_IF_NOT_NULL(ucc_module->previous_ireduce_scatter_module);
     mca_coll_ucc_module_clear(ucc_module);
 }
 
@@ -123,6 +129,8 @@ static int mca_coll_ucc_save_coll_handlers(mca_coll_ucc_module_t *ucc_module)
     SAVE_PREV_COLL_API(ireduce);
     SAVE_PREV_COLL_API(reduce_scatter_block);
     SAVE_PREV_COLL_API(ireduce_scatter_block);
+    SAVE_PREV_COLL_API(reduce_scatter);
+    SAVE_PREV_COLL_API(ireduce_scatter);
     return OMPI_SUCCESS;
 }
 
@@ -530,6 +538,7 @@ mca_coll_ucc_comm_query(struct ompi_communicator_t *comm, int *priority)
     SET_COLL_PTR(ucc_module, ALLGATHER,      allgather);
     SET_COLL_PTR(ucc_module, ALLGATHERV,     allgatherv);
     SET_COLL_PTR(ucc_module, REDUCE_SCATTER, reduce_scatter_block);
+    SET_COLL_PTR(ucc_module, REDUCE_SCATTERV, reduce_scatter);
     return &ucc_module->super;
 }
 
