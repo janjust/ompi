@@ -1,0 +1,26 @@
+This patch modifies apply_patch() to write the patch bytes one-at-a-time
+with a 1-second sleep after the first byte.  This guarantees that any
+concurrent mmap() call will execute partially-overwritten machine code.
+
+FOR TESTING ONLY — do not commit.
+
+--- a/opal/mca/patcher/base/patcher_base_patch.c
++++ b/opal/mca/patcher/base/patcher_base_patch.c
+@@ -148,7 +148,17 @@ static inline void apply_patch(unsigned char *patch_data, uintptr_t address, si
+ {
+     ModifyMemoryProtection(address, data_size, PROT_EXEC | PROT_READ | PROT_WRITE);
+-    memcpy((void *) address, patch_data, data_size);
++    /*
++     * TESTING: write first byte, sleep 1 s, write rest.
++     * During the sleep any thread executing mmap() fetches:
++     *   x86_64: 0x49 (REX prefix) followed by original mmap prologue bytes
++     *   AArch64: 3 bytes of a 4-byte mov instruction => undefined opcode => SIGILL
++     * Remove before production use.
++     */
++    ((volatile unsigned char *)address)[0] = ((unsigned char *)patch_data)[0];
++    usleep(1000000); /* 1 s window — TESTING ONLY */
++    if (data_size > 1)
++        memcpy((void *)((unsigned char *)address + 1),
++               (unsigned char *)patch_data + 1,
++               data_size - 1);
+ #if defined(HAVE___CLEAR_CACHE)
