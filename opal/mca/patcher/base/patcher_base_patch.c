@@ -22,6 +22,7 @@
 #include "opal/prefetch.h"
 #include "opal/util/sys_limits.h"
 #include <sys/mman.h>
+#include <unistd.h>   /* usleep — TESTING ONLY, remove with widen_window patch */
 
 static void mca_patcher_base_patch_construct(mca_patcher_base_patch_t *patch)
 {
@@ -149,7 +150,18 @@ static void ModifyMemoryProtection(uintptr_t addr, size_t length, int prot)
 static inline void apply_patch(unsigned char *patch_data, uintptr_t address, size_t data_size)
 {
     ModifyMemoryProtection(address, data_size, PROT_EXEC | PROT_READ | PROT_WRITE);
-    memcpy((void *) address, patch_data, data_size);
+    /*
+     * TESTING ONLY: write first byte, sleep 1 s, write rest.
+     * During the sleep any thread executing mmap()/madvise() fetches
+     * partially-overwritten machine code and crashes.
+     * Remove before production use.
+     */
+    ((volatile unsigned char *)address)[0] = ((unsigned char *)patch_data)[0];
+    usleep(1000000); /* 1 s window — TESTING ONLY */
+    if (data_size > 1)
+        memcpy((void *)((unsigned char *)address + 1),
+               (unsigned char *)patch_data + 1,
+               data_size - 1);
 #if defined(HAVE___CLEAR_CACHE)
     /* do not allow global declaration of compiler intrinsic */
     void __clear_cache(void *beg, void *end);
