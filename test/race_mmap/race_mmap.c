@@ -7,32 +7,36 @@
  * This is triggered during MPI_Init when the UCX PML component opens and calls
  * opal_common_ucx_mca_register() -> mca_base_framework_open(memory) -> patcher_open().
  *
- * If any thread executes mmap() during the ~3-5ns memcpy window it will fetch
- * partially-overwritten machine code and crash.
+ * If any thread executes madvise()/mmap() during the ~3-5ns memcpy window it
+ * will fetch partially-overwritten machine code and crash.
  *
  * --- How to build and run ---
  *
  * 1. Narrow window (statistical, may need many runs):
  *      mpicc -O2 -o race_mmap race_mmap.c -lpthread
- *      mpirun -np 1 ./race_mmap [num_threads]    # default: 64
+ *      mpirun -np 1 --bind-to none ./race_mmap [num_threads]   # default: 64
  *
  * 2. Wide window (virtually guaranteed, requires slowpatch.so):
  *      gcc -shared -fPIC -O0 -o slowpatch.so slowpatch.c -ldl -lpthread
  *      mpicc -O2 -o race_mmap race_mmap.c -lpthread
- *      LD_PRELOAD=./slowpatch.so mpirun -np 1 ./race_mmap 16
+ *      LD_PRELOAD=./slowpatch.so mpirun -np 1 --bind-to none ./race_mmap 16
  *
  *      The LD_PRELOAD intercepts memcpy() and, when it detects a write to an
  *      executable page (i.e. apply_patch's patching memcpy), replaces it with
  *      a byte-by-byte loop with PATCH_SLEEP_US microseconds between bytes.
  *      Default: 100 000 us (100 ms) per byte => 1.3s window on x86_64.
  *
- * --- Why direct mmap() and not malloc() ---
+ * --- Why madvise(MADV_DONTNEED) and not mmap()/munmap() ---
  *
- * The patcher patches the mmap *symbol* entry bytes. malloc() uses per-thread
- * arena sbrk()/brk() for most small allocations and only calls mmap()
- * occasionally to grow an arena. Direct mmap()/munmap() calls bypass the
- * allocator entirely and go straight through the symbol being patched,
- * maximising the collision rate with the patching window.
+ * mmap() and munmap() acquire the kernel's mmap_lock as a *write* lock,
+ * serialising all callers process-wide.  With 64 threads hammering mmap()
+ * you get ~2-3 cores active regardless of --bind-to none.
+ *
+ * madvise(MADV_DONTNEED) acquires mmap_lock as a *read* lock, so all 64
+ * threads can run in parallel.  madvise is also patched by patcher_open()
+ * (patch_symbol("madvise", ...)), so it goes through the same non-atomic
+ * 13/20-byte patch window.  Each thread pre-maps a private region once and
+ * loops calling madvise on it — no kernel write-lock contention.
  *
  * --- Expected outcome ---
  *
@@ -56,7 +60,8 @@
 #include <errno.h>
 
 #define DEFAULT_NUM_WORKERS  64
-#define MAP_SIZE             4096
+#define PAGES_PER_WORKER     64                          /* pages per thread's private region */
+#define MAP_SIZE             (PAGES_PER_WORKER * 4096)   /* pre-mapped region per thread */
 
 static volatile int  g_stop  = 0;
 static atomic_long   g_count = 0;
@@ -66,27 +71,39 @@ static void *worker(void *arg)
 {
     (void)arg;
     long c = 0, f = 0;
+    int  page = 0;
+
+    /*
+     * Pre-map a private region once per thread.  We never munmap it in the
+     * loop, so we never take mmap_lock in write mode during the hot path.
+     */
+    void *region = mmap(NULL, MAP_SIZE,
+                        PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANONYMOUS,
+                        -1, 0);
+    if (region == MAP_FAILED) {
+        atomic_fetch_add(&g_fails, 1);
+        return NULL;
+    }
+    /* Fault all pages in so madvise has real work to do */
+    memset(region, 1, MAP_SIZE);
 
     while (!g_stop) {
         /*
-         * Direct mmap/munmap: every call goes through the symbol being
-         * patched. MAP_ANONYMOUS + MAP_PRIVATE: no fd, no file backing,
-         * pure virtual address allocation - the fastest path.
+         * madvise(MADV_DONTNEED) goes through the patched madvise symbol
+         * (patcher_open patches "madvise" the same way it patches "mmap").
+         * It acquires mmap_lock in READ mode, so all 64 threads run truly
+         * in parallel — no write-lock serialisation.
          */
-        void *p = mmap(NULL, MAP_SIZE,
-                       PROT_READ | PROT_WRITE,
-                       MAP_PRIVATE | MAP_ANONYMOUS,
-                       -1, 0);
-        if (p == MAP_FAILED) {
+        char *page_addr = (char *)region + (page % PAGES_PER_WORKER) * 4096;
+        if (madvise(page_addr, 4096, MADV_DONTNEED) != 0)
             f++;
-            continue;
-        }
-        /* Touch the page so the kernel actually faults it in */
-        ((volatile char *)p)[0] = 1;
-        munmap(p, MAP_SIZE);
-        c++;
+        else
+            c++;
+        page++;
     }
 
+    munmap(region, MAP_SIZE);
     atomic_fetch_add(&g_count, c);
     atomic_fetch_add(&g_fails, f);
     return NULL;
