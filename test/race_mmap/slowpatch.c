@@ -39,6 +39,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
+#include <sys/syscall.h>
 
 /* ------------------------------------------------------------------ */
 /* Real function pointers, initialised once via constructor            */
@@ -99,6 +101,11 @@ static int page_is_exec_write(const void *addr)
 /* ------------------------------------------------------------------ */
 int mprotect(void *addr, size_t len, int prot)
 {
+    /* Guard against calling NULL during early library-constructor ordering */
+    if (real_mprotect == NULL) {
+        long r = syscall(SYS_mprotect, addr, len, prot);
+        return (r < 0) ? (errno = -r, -1) : 0;
+    }
     int ret = real_mprotect(addr, len, prot);
     uintptr_t page = (uintptr_t)addr & ~(uintptr_t)4095;
 
