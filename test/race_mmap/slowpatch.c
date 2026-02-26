@@ -163,5 +163,12 @@ void *memcpy(void *dst, const void *src, size_t n)
         return dst;
     }
 
+    /* Guard against calling NULL during early library-constructor ordering */
+    if (real_memcpy == NULL) {
+        volatile char *d = (volatile char *)dst;
+        const char    *s = (const char *)src;
+        for (size_t i = 0; i < n; i++) d[i] = s[i];
+        return dst;
+    }
     return real_memcpy(dst, src, n);
 }
