@@ -66,10 +66,13 @@ PROTOTYPE ERROR_CLASS Get_elements(STATUS status, DATATYPE datatype, COUNT_OUT c
 
     ret = ompi_datatype_get_elements (datatype, status->_ucount, &internal_count);
     if (OMPI_SUCCESS == ret || OMPI_ERR_VALUE_OUT_OF_BOUNDS == ret) {
-        if (OMPI_SUCCESS == ret && internal_count <= INT_MAX) {
+        /* Clip at the maximum value representable in the output type:
+         * INT_MAX for int (regular variant), SSIZE_MAX for MPI_Count (_c variant). */
+        size_t count_max = (sizeof(*count) > sizeof(int)) ? (size_t) SSIZE_MAX : (size_t) INT_MAX;
+        if (OMPI_SUCCESS == ret && internal_count <= count_max) {
             *count = internal_count;
         } else {
-            /* If we have more elements that we can represent with a signed int then we must
+            /* If we have more elements than we can represent then we must
              * set count to MPI_UNDEFINED (MPI 3.0).
              */
             *count = MPI_UNDEFINED;
