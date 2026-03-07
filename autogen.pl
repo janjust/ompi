@@ -1516,6 +1516,43 @@ Perhaps you forgot to \"git clone --recursive ...\", or you need to
 
 #---------------------------------------------------------------------------
 
+# Apply local patches to 3rd-party submodules (if any exist in patches/)
+++$step;
+verbose "\n$step. Applying local patches to 3rd-party submodules\n\n";
+
+my $patches_dir = "contrib/patches";
+if (-d $patches_dir) {
+    opendir(my $pdh, $patches_dir) || my_die "Can't open $patches_dir";
+    my @subdirs_to_patch = sort grep { !/^\./ && -d "$patches_dir/$_" } readdir($pdh);
+    closedir($pdh);
+
+    foreach my $submod (@subdirs_to_patch) {
+        my $submod_dir = "3rd-party/$submod";
+        next unless -d $submod_dir;
+
+        my @patchfiles = sort glob("$patches_dir/$submod/*.patch");
+        next unless @patchfiles;
+
+        verbose "=== Patching $submod_dir\n";
+        my $start = Cwd::cwd();
+        chdir($submod_dir) || my_die "Can't chdir to $submod_dir";
+        foreach my $pfile (@patchfiles) {
+            my $abs_pfile = "$start/$pfile";
+            verbose "--- Applying $pfile\n";
+            # -N: ignore already-applied patches; -p1: strip one path component
+            system("$patch_prog -N -p1 < $abs_pfile > /dev/null 2>&1");
+            if ($? != 0) {
+                verbose "    (already applied or failed - continuing)\n";
+            }
+        }
+        chdir($start);
+    }
+} else {
+    verbose "=== No patches/ directory found, skipping\n";
+}
+
+#---------------------------------------------------------------------------
+
 # Save the platform file in the m4
 $m4 .= "dnl Platform file\n";
 
