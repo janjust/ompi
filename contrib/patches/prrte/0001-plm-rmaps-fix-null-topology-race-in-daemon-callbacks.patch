@@ -1,0 +1,80 @@
+diff --git a/src/mca/plm/base/plm_base_launch_support.c b/src/mca/plm/base/plm_base_launch_support.c
+index 4c27663fa1..60ace9062b 100644
+--- a/src/mca/plm/base/plm_base_launch_support.c
++++ b/src/mca/plm/base/plm_base_launch_support.c
+@@ -1344,7 +1344,9 @@ void prte_plm_base_daemon_topology(int status, pmix_proc_t *sender,
+     }
+ 
+     // setup the topology's summary
+-    prte_hwloc_base_setup_summary(topo);
++    if (NULL != topo) {
++        prte_hwloc_base_setup_summary(topo);
++    }
+ 
+ 
+ CLEANUP:
+@@ -1704,8 +1706,10 @@ void prte_plm_base_daemon_callback(int status, pmix_proc_t *sender, pmix_data_bu
+             t->topo = topo;
+             t->index = pmix_pointer_array_add(prte_node_topologies, t);
+             daemon->node->topology = t;
+-            daemon->node->available = prte_hwloc_base_filter_cpus(t->topo);
+-            prte_hwloc_base_setup_summary(t->topo);
++            if (NULL != t->topo) {
++                daemon->node->available = prte_hwloc_base_filter_cpus(t->topo);
++                prte_hwloc_base_setup_summary(t->topo);
++            }
+             // cannot have cached daemons
+             free(nodename);
+             nodename = NULL;
+@@ -1746,9 +1750,12 @@ void prte_plm_base_daemon_callback(int status, pmix_proc_t *sender, pmix_data_bu
+                 /* update the node's available processors */
+                 if (NULL != daemon->node->available) {
+                     hwloc_bitmap_free(daemon->node->available);
++                    daemon->node->available = NULL;
++                }
++                if (NULL != t->topo) {
++                    daemon->node->available = prte_hwloc_base_filter_cpus(t->topo);
++                    prte_hwloc_base_setup_summary(t->topo);
+                 }
+-                daemon->node->available = prte_hwloc_base_filter_cpus(t->topo);
+-                prte_hwloc_base_setup_summary(t->topo);
+                 break;
+             }
+         }
+@@ -1789,7 +1796,7 @@ void prte_plm_base_daemon_callback(int status, pmix_proc_t *sender, pmix_data_bu
+                             goto CLEANUP;
+                         }
+                         dptr->node->topology = t;
+-                        if (NULL == dptr->node->available) {
++                        if (NULL == dptr->node->available && NULL != t->topo) {
+                             dptr->node->available = prte_hwloc_base_filter_cpus(t->topo);
+                             prte_hwloc_base_setup_summary(t->topo);
+                         }
+diff --git a/src/mca/rmaps/base/rmaps_base_support_fns.c b/src/mca/rmaps/base/rmaps_base_support_fns.c
+index b94d6aea15..439c51078a 100644
+--- a/src/mca/rmaps/base/rmaps_base_support_fns.c
++++ b/src/mca/rmaps/base/rmaps_base_support_fns.c
+@@ -401,6 +401,11 @@ complete:
+                 PMIX_RELEASE(node);
+                 continue;
+             }
++            /* node->available may be NULL if topology arrived after the daemon
++             * callback already ran - compute it now from the known topology */
++            if (NULL == node->available) {
++                node->available = prte_hwloc_base_filter_cpus(node->topology->topo);
++            }
+             /* cache the available CPUs for later */
+             hwloc_bitmap_copy(node->jobcache, node->available);
+         }
+@@ -417,6 +422,11 @@ complete:
+                 PMIX_RELEASE(node);
+                 continue;
+             }
++            /* node->available may be NULL if topology arrived after the daemon
++             * callback already ran - compute it now from the known topology */
++            if (NULL == node->available) {
++                node->available = prte_hwloc_base_filter_cpus(node->topology->topo);
++            }
+             /* if the hnp was not allocated, or flagged not to be used,
+              * then remove it here */
+             if (!prte_hnp_is_allocated ||

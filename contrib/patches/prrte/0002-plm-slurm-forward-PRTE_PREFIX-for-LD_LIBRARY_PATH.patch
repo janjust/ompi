@@ -1,0 +1,99 @@
+diff --git a/src/mca/plm/slurm/plm_slurm_module.c b/src/mca/plm/slurm/plm_slurm_module.c
+index 7954ad230f..5475fa0d21 100644
+--- a/src/mca/plm/slurm/plm_slurm_module.c
++++ b/src/mca/plm/slurm/plm_slurm_module.c
+@@ -561,7 +561,7 @@ static int plm_slurm_start_proc(int argc, char **argv,
+     int fd;
+     int srun_pid;
+     int n;
+-    char **tmp = NULL, *p;
++    char **tmp = NULL, *p, *saved_prte_prefix = NULL;
+     char *exec_argv = pmix_path_findv(argv[0], 0, environ, NULL);
+     prte_proc_t *dummy;
+     char *oldenv, *newenv;
+@@ -597,6 +597,14 @@ static int plm_slurm_start_proc(int argc, char **argv,
+     if (0 == srun_pid) { /* child */
+         char *bin_base = NULL, *lib_base = NULL;
+ 
++        /* Save PRTE_PREFIX before we purge PRTE_* from the environment.
++         * We will use it below to set PATH/LD_LIBRARY_PATH for prted
++         * if --prefix was not given on the mpirun command line. */
++        p = getenv("PRTE_PREFIX");
++        if (NULL != p) {
++            saved_prte_prefix = strdup(p);
++        }
++
+         /* Slurm forwards the entire environment, which we
+          * REALLY don't want them to do as it might contain
+          * envars pertaining to tool connections. So purge
+@@ -659,6 +667,39 @@ static int plm_slurm_start_proc(int argc, char **argv,
+             PMIX_SETENV_COMPAT("PRTE_PREFIX", prefix, true, &environ);
+         }
+ 
++        /* Fallback: if --prefix was not given but PRTE_PREFIX was in the
++         * environment, use it to configure PATH and LD_LIBRARY_PATH for
++         * prted on the compute nodes.  Without this, prted may load the
++         * wrong hwloc and fail to report a valid topology. */
++        if (NULL == prefix && NULL != saved_prte_prefix) {
++            /* Reset PATH */
++            oldenv = getenv("PATH");
++            if (NULL != oldenv) {
++                pmix_asprintf(&newenv, "%s/%s:%s", saved_prte_prefix, bin_base, oldenv);
++            } else {
++                pmix_asprintf(&newenv, "%s/%s", saved_prte_prefix, bin_base);
++            }
++            PMIX_SETENV_COMPAT("PATH", newenv, true, &environ);
++            PMIX_OUTPUT_VERBOSE((1, prte_plm_base_framework.framework_output,
++                                 "%s plm:slurm: set PATH from PRTE_PREFIX: %s",
++                                 PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), newenv));
++            free(newenv);
++            /* Reset LD_LIBRARY_PATH */
++            oldenv = getenv("LD_LIBRARY_PATH");
++            if (NULL != oldenv) {
++                pmix_asprintf(&newenv, "%s/%s:%s", saved_prte_prefix, lib_base, oldenv);
++            } else {
++                pmix_asprintf(&newenv, "%s/%s", saved_prte_prefix, lib_base);
++            }
++            PMIX_SETENV_COMPAT("LD_LIBRARY_PATH", newenv, true, &environ);
++            PMIX_OUTPUT_VERBOSE((1, prte_plm_base_framework.framework_output,
++                                 "%s plm:slurm: set LD_LIBRARY_PATH from PRTE_PREFIX: %s",
++                                 PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), newenv));
++            free(newenv);
++            /* re-export PRTE_PREFIX so srun propagates it to prted */
++            PMIX_SETENV_COMPAT("PRTE_PREFIX", saved_prte_prefix, true, &environ);
++        }
++
+         /* for pmix_prefix, we only have to modify the library path.
+          * NOTE: obviously, we cannot know the lib_base used for the
+          * PMIx library. All we can do is hope they used the same one
+diff --git a/src/prted/prte_app_parse.c b/src/prted/prte_app_parse.c
+index f3724841fc..345aa7fdc2 100644
+--- a/src/prted/prte_app_parse.c
++++ b/src/prted/prte_app_parse.c
+@@ -297,6 +297,13 @@ static int create_app(prte_schizo_base_module_t *schizo, char **argv,
+             iptr = PMIX_NEW(prte_info_item_t);
+             PMIX_INFO_LOAD(&iptr->info, "PRTE_PREFIX", opt->values[0], PMIX_STRING);
+             pmix_list_append(jobdata, &iptr->super);
++        } else if (NULL != (param = getenv("PRTE_PREFIX"))) {
++            /* --prefix was not given on the cmd line, but PRTE_PREFIX was set
++             * in the environment (e.g., by module load). Use it for daemon launch
++             * so the PLM can correctly set LD_LIBRARY_PATH on remote nodes. */
++            iptr = PMIX_NEW(prte_info_item_t);
++            PMIX_INFO_LOAD(&iptr->info, "PRTE_PREFIX", param, PMIX_STRING);
++            pmix_list_append(jobdata, &iptr->super);
+         }
+ 
+         opt = pmix_cmd_line_get_param(&results, PRTE_CLI_PMIX_PREFIX);
+@@ -319,6 +326,12 @@ static int create_app(prte_schizo_base_module_t *schizo, char **argv,
+             iptr = PMIX_NEW(prte_info_item_t);
+             PMIX_INFO_LOAD(&iptr->info, PMIX_PREFIX, opt->values[0], PMIX_STRING);
+             pmix_list_append(jobdata, &iptr->super);
++        } else if (NULL != (param = getenv("PMIX_PREFIX"))) {
++            /* --pmix-prefix was not given on the cmd line, but PMIX_PREFIX was set
++             * in the environment (e.g., by module load). Forward it for daemon launch. */
++            iptr = PMIX_NEW(prte_info_item_t);
++            PMIX_INFO_LOAD(&iptr->info, PMIX_PREFIX, param, PMIX_STRING);
++            pmix_list_append(jobdata, &iptr->super);
+         }
+     }
+ 
