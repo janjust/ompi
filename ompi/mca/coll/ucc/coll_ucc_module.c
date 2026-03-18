@@ -16,8 +16,38 @@
 #include "coll_ucc_dtypes.h"
 #include "ompi/mca/coll/base/coll_tags.h"
 #include "ompi/mca/pml/pml.h"
+#include <execinfo.h>
 
 #define OBJ_RELEASE_IF_NOT_NULL( obj ) if( NULL != (obj) ) OBJ_RELEASE( obj );
+
+static void mca_coll_ucc_bt(const char *event, ompi_communicator_t *comm)
+{
+    mca_coll_ucc_component_t *cm  = &mca_coll_ucc_component;
+    void                    **bt;
+    char                    **sym;
+    int                       n, i, depth;
+
+    depth = cm->bt_depth > 0 ? cm->bt_depth : 0;
+    UCC_VERBOSE(1, "ucc team %s: comm %p name \"%s\" size %d cid %llu",
+                event, (void *)comm, comm->c_name, ompi_comm_size(comm),
+                (long long unsigned)ompi_comm_get_local_cid(comm));
+    if (depth == 0) {
+        return;
+    }
+    bt = malloc(depth * sizeof(*bt));
+    if (!bt) {
+        return;
+    }
+    n   = backtrace(bt, depth);
+    sym = backtrace_symbols(bt, n);
+    if (sym) {
+        for (i = 0; i < n; i++) {
+            UCC_VERBOSE(1, "  [%2d] %s", i, sym[i]);
+        }
+        free(sym);
+    }
+    free(bt);
+}
 
 /*
  * Initial query function that is invoked during MPI_INIT, allowing
@@ -138,6 +168,8 @@ void mca_coll_ucc_finalize_ctx(void)
 static void mca_coll_ucc_module_destruct(mca_coll_ucc_module_t *ucc_module)
 {
     mca_coll_ucc_component_t *cm = &mca_coll_ucc_component;
+
+    mca_coll_ucc_bt("destroy", ucc_module->comm);
 
     /* Remove from active_modules before team destroy so that
      * mca_coll_ucc_finalize_ctx() (called below for COMM_WORLD) does not
@@ -523,6 +555,7 @@ static int mca_coll_ucc_module_enable(mca_coll_base_module_t *module,
     opal_list_append(&cm->active_modules, &ucc_module->list_item);
     ucc_module->in_active_list = true;
 
+    mca_coll_ucc_bt("create", comm);
     mca_coll_ucc_save_coll_handlers(ucc_module);
 
     return OMPI_SUCCESS;

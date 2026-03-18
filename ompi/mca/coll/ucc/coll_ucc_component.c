@@ -107,6 +107,13 @@ static int mca_coll_ucc_register(void)
                                     "Comma separated list of UCC coll types to be enabled",
                                     MCA_BASE_VAR_TYPE_STRING, NULL, 0, MCA_BASE_VAR_FLAG_SETTABLE,
                                     OPAL_INFO_LVL_6, MCA_BASE_VAR_SCOPE_ALL, &cm->cts);
+
+    cm->bt_depth = 64;
+    mca_base_component_var_register(c, "bt_depth",
+                                    "Backtrace depth for UCC team lifecycle tracing "
+                                    "(requires coll_ucc_verbose >= 1); 0 = disabled",
+                                    MCA_BASE_VAR_TYPE_INT, NULL, 0, MCA_BASE_VAR_FLAG_SETTABLE,
+                                    OPAL_INFO_LVL_6, MCA_BASE_VAR_SCOPE_ALL, &cm->bt_depth);
     return OMPI_SUCCESS;
 }
 

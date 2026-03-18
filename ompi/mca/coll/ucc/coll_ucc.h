@@ -69,6 +69,7 @@ struct mca_coll_ucc_component_t {
     ucc_context_h                   ucc_context;
     opal_free_list_t                requests;
     opal_list_t                     active_modules; /* all modules with live UCC teams */
+    int                             bt_depth;       /* backtrace depth for team lifecycle tracing; 0 = off */
 };
 typedef struct mca_coll_ucc_component_t mca_coll_ucc_component_t;
 
