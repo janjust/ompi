@@ -91,6 +91,8 @@ static void mca_coll_ucc_module_clear(mca_coll_ucc_module_t *ucc_module)
 
 static void mca_coll_ucc_module_construct(mca_coll_ucc_module_t *ucc_module)
 {
+    OBJ_CONSTRUCT(&ucc_module->list_item, opal_list_item_t);
+    ucc_module->in_active_list = false;
     mca_coll_ucc_module_clear(ucc_module);
 }
 
@@ -103,8 +105,27 @@ static int mca_coll_ucc_progress(void)
 void mca_coll_ucc_finalize_ctx(void)
 {
     mca_coll_ucc_component_t *cm = &mca_coll_ucc_component;
+    opal_list_item_t         *item;
+    mca_coll_ucc_module_t    *mod;
+    ucc_status_t              status;
+
     if (!cm->libucc_initialized) {
         return;
+    }
+    /* Destroy any UCC teams still alive (e.g. OMPI-internal communicators
+     * that outlive MPI_COMM_WORLD and will be cleaned up later via
+     * opal_finalize_cleanup_domain). Their module destructors will fire
+     * after ucc_context_destroy, so we must handle them here first. */
+    OPAL_LIST_FOREACH(item, &cm->active_modules, opal_list_item_t) {
+        mod = (mca_coll_ucc_module_t*)((char*)item -
+              offsetof(mca_coll_ucc_module_t, list_item));
+        if (mod->ucc_team != NULL) {
+            while (UCC_INPROGRESS == (status = ucc_team_destroy(mod->ucc_team))) {}
+            if (UCC_OK != status) {
+                UCC_ERROR("UCC team destroy failed");
+            }
+            mod->ucc_team = NULL;
+        }
     }
     UCC_VERBOSE(1, "finalizing ucc library");
     opal_progress_unregister(mca_coll_ucc_progress);
@@ -116,6 +137,17 @@ void mca_coll_ucc_finalize_ctx(void)
 
 static void mca_coll_ucc_module_destruct(mca_coll_ucc_module_t *ucc_module)
 {
+    mca_coll_ucc_component_t *cm = &mca_coll_ucc_component;
+
+    /* Remove from active_modules before team destroy so that
+     * mca_coll_ucc_finalize_ctx() (called below for COMM_WORLD) does not
+     * encounter this module while iterating the list. */
+    if (ucc_module->in_active_list) {
+        opal_list_remove_item(&cm->active_modules, &ucc_module->list_item);
+        ucc_module->in_active_list = false;
+    }
+    /* ucc_team may have been NULLed by mca_coll_ucc_finalize_ctx() if this
+     * module outlived MPI_COMM_WORLD and is being cleaned up late. */
     if (ucc_module->ucc_team != NULL) {
         ucc_status_t status;
         while (UCC_INPROGRESS == (status = ucc_team_destroy(ucc_module->ucc_team))) {}
@@ -124,9 +156,9 @@ static void mca_coll_ucc_module_destruct(mca_coll_ucc_module_t *ucc_module)
         }
     }
     /* ucc_context_destroy needs OOB via MPI_COMM_WORLD; call it while
-       COMM_WORLD is still alive (module destructor fires before c_local_group
-       is released in ompi_comm_destruct). mca_coll_ucc_close() will call
-       mca_coll_ucc_finalize_ctx() as a no-op safety net if already done. */
+     * COMM_WORLD is still alive (module destructor fires before c_local_group
+     * is released in ompi_comm_destruct). All remaining teams in active_modules
+     * are destroyed inside mca_coll_ucc_finalize_ctx() before the context. */
     if (ucc_module->comm == &ompi_mpi_comm_world.comm) {
         mca_coll_ucc_finalize_ctx();
     }
@@ -487,6 +519,9 @@ static int mca_coll_ucc_module_enable(mca_coll_base_module_t *module,
         UCC_ERROR("ucc_team_create_test failed");
         goto err;
     }
+
+    opal_list_append(&cm->active_modules, &ucc_module->list_item);
+    ucc_module->in_active_list = true;
 
     mca_coll_ucc_save_coll_handlers(ucc_module);
 
