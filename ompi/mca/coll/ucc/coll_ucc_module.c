@@ -28,9 +28,10 @@ static void mca_coll_ucc_bt(const char *event, ompi_communicator_t *comm)
     int                       n, i, depth;
 
     depth = cm->bt_depth > 0 ? cm->bt_depth : 0;
-    UCC_VERBOSE(1, "ucc team %s: comm %p name \"%s\" size %d cid %llu",
+    UCC_VERBOSE(1, "ucc team %s: comm %p name \"%s\" size %d cid %llu refcnt %d",
                 event, (void *)comm, comm->c_name, ompi_comm_size(comm),
-                (long long unsigned)ompi_comm_get_local_cid(comm));
+                (long long unsigned)ompi_comm_get_local_cid(comm),
+                ((opal_object_t *)comm)->obj_reference_count);
     if (depth == 0) {
         return;
     }

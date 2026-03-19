@@ -370,6 +370,10 @@ static int ompi_comm_finalize (void)
         comm = ompi_comm_lookup(i);
         if ( NULL != comm ) {
             /* Communicator has not been freed before finalize */
+            fprintf(stderr, "ompi_comm_finalize: releasing comm %p name \"%s\" size %d cid %d refcnt %d\n",
+                    (void *)comm, comm->c_name, ompi_comm_size(comm),
+                    comm->c_index,
+                    ((opal_object_t *)comm)->obj_reference_count);
             OBJ_RELEASE(comm);
             comm = ompi_comm_lookup(i);
             if ( NULL != comm ) {
