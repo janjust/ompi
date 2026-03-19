@@ -2171,10 +2171,11 @@ int ompi_comm_free( ompi_communicator_t **comm )
     if ( OMPI_COMM_IS_DYNAMIC (*comm) ) {
         ompi_comm_num_dyncomm --;
     }
-    fprintf(stderr, "ompi_comm_free: comm %p name \"%s\" size %d cid %d refcnt %d\n",
-            (void *)(*comm), (*comm)->c_name, ompi_comm_size(*comm),
-            (*comm)->c_index,
-            ((opal_object_t *)(*comm))->obj_reference_count);
+    opal_output_verbose(10, ompi_comm_output,
+                        "ompi_comm_free: comm %p name \"%s\" size %d cid %d refcnt %d",
+                        (void *)(*comm), (*comm)->c_name, ompi_comm_size(*comm),
+                        (*comm)->c_index,
+                        ((opal_object_t *)(*comm))->obj_reference_count);
     OBJ_RELEASE( (*comm) );
 
     if ( is_extra_retain) {

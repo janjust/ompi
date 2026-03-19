@@ -68,7 +68,6 @@ struct mca_coll_ucc_component_t {
     ucc_coll_type_t                 nb_cts_requested;
     ucc_context_h                   ucc_context;
     opal_free_list_t                requests;
-    opal_list_t                     active_modules; /* all modules with live UCC teams */
     int                             bt_depth;       /* backtrace depth for team lifecycle tracing; 0 = off */
 };
 typedef struct mca_coll_ucc_component_t mca_coll_ucc_component_t;
@@ -83,8 +82,6 @@ struct mca_coll_ucc_module_t {
     ompi_communicator_t*                            comm;
     int                                             rank;
     ucc_team_h                                      ucc_team;
-    opal_list_item_t                                list_item;    /* node in component's active_modules */
-    bool                                            in_active_list;
     mca_coll_base_module_allreduce_fn_t             previous_allreduce;
     mca_coll_base_module_t*                         previous_allreduce_module;
     mca_coll_base_module_iallreduce_fn_t            previous_iallreduce;
