@@ -107,6 +107,11 @@ static void mca_coll_hcoll_module_destruct(mca_coll_hcoll_module_t *hcoll_module
 {
     int context_destroyed;
 
+    HCOL_VERBOSE(1, "mca_coll_hcoll_module_destruct: comm %p name \"%s\" size %d cid %d ctx %p",
+                 (void *)hcoll_module->comm, hcoll_module->comm->c_name,
+                 ompi_comm_size(hcoll_module->comm), hcoll_module->comm->c_index,
+                 hcoll_module->hcoll_context);
+
     if (hcoll_module->comm == &ompi_mpi_comm_world.comm){
         if (OMPI_SUCCESS != ompi_attr_free_keyval(COMM_ATTR, &hcoll_comm_attr_keyval, 0)) {
             HCOL_VERBOSE(1,"hcoll ompi_attr_free_keyval failed");
@@ -382,6 +387,10 @@ mca_coll_hcoll_comm_query(struct ompi_communicator_t *comm, int *priority)
 
     hcoll_module->hcoll_context =
         hcoll_create_context((rte_grp_handle_t)comm);
+
+    HCOL_VERBOSE(1, "mca_coll_hcoll_comm_query: comm %p name \"%s\" size %d cid %d -> hcoll_context %p",
+                 (void *)comm, comm->c_name, ompi_comm_size(comm), comm->c_index,
+                 hcoll_module->hcoll_context);
 
     if (NULL == hcoll_module->hcoll_context){
         HCOL_VERBOSE(1,"hcoll_create_context returned NULL");
