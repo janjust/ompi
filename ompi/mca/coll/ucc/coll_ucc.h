@@ -16,6 +16,7 @@
 #include "ompi/mca/mca.h"
 #include "opal/memoryhooks/memory.h"
 #include "opal/mca/memory/base/base.h"
+#include "opal/class/opal_list.h"
 #include "ompi/mca/coll/coll.h"
 #include "ompi/communicator/communicator.h"
 #include "ompi/attribute/attribute.h"
@@ -68,6 +69,7 @@ struct mca_coll_ucc_component_t {
     ucc_coll_type_t                 nb_cts_requested;
     ucc_context_h                   ucc_context;
     opal_free_list_t                requests;
+    opal_list_t                     active_modules;
 };
 typedef struct mca_coll_ucc_component_t mca_coll_ucc_component_t;
 
@@ -78,6 +80,8 @@ OMPI_DECLSPEC extern mca_coll_ucc_component_t mca_coll_ucc_component;
  */
 struct mca_coll_ucc_module_t {
     mca_coll_base_module_t                          super;
+    opal_list_item_t                                list_item;
+    bool                                            in_active_list;
     ompi_communicator_t*                            comm;
     int                                             rank;
     ucc_team_h                                      ucc_team;
