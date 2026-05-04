@@ -60,14 +60,13 @@ static bool modex_reqd=false;
 int mca_part_base_select(bool enable_progress_threads,
                         bool enable_mpi_threads)
 {
-    int i, priority = 0, best_priority = 0, num_part = 0;
+    int priority = 0, best_priority = 0, num_part = 0;
     opal_list_item_t *item = NULL;
     mca_base_component_list_item_t *cli = NULL;
     mca_part_base_component_t *component = NULL, *best_component = NULL;
     mca_part_base_module_t *module = NULL, *best_module = NULL;
     opal_list_t opened;
     opened_component_t *om = NULL;
-    bool found_part;
 
     /* Traverse the list of available components; call their init
        functions. */
@@ -78,30 +77,6 @@ int mca_part_base_select(bool enable_progress_threads,
     OBJ_CONSTRUCT(&opened, opal_list_t);
     OPAL_LIST_FOREACH(cli, &ompi_part_base_framework.framework_components, mca_base_component_list_item_t) {
         component = (mca_part_base_component_t *) cli->cli_component;
-
-        /* if there is an include list - item must be in the list to be included */
-        found_part = false;
-        for( i = 0; i < opal_pointer_array_get_size(&mca_part_base_part); i++) {
-            char * tmp_val = NULL;
-            tmp_val = (char *) opal_pointer_array_get_item(&mca_part_base_part, i);
-            if( NULL == tmp_val) {
-                continue;
-            }
-
-            if(0 == strncmp(component->partm_version.mca_component_name,
-                            tmp_val, strlen(component->partm_version.mca_component_name)) ) {
-                found_part = true;
-                break;
-            }
-        }
-
-        if(!found_part && opal_pointer_array_get_size(&mca_part_base_part)) {
-            opal_output_verbose( 10, ompi_part_base_framework.framework_output,
-                                     "select: component %s not in the include list",
-                                     component->partm_version.mca_component_name );
-
-            continue;
-        }
 
         /* if there is no init function - ignore it */
         if (NULL == component->partm_init) {
@@ -148,22 +123,30 @@ int mca_part_base_select(bool enable_progress_threads,
 
     /* Finished querying all components.  Check for the bozo case. */
 
-    if( NULL == best_component ) {
-        opal_show_help("help-mca-base.txt", "find-available:none found",
-                       true, "part",
-                       opal_process_info.nodename,
-                       "part");
-        for( i = 0; i < opal_pointer_array_get_size(&mca_part_base_part); i++) {
-            char * tmp_val = NULL;
-            tmp_val = (char *) opal_pointer_array_get_item(&mca_part_base_part, i);
-            if( NULL == tmp_val) {
-                continue;
+    if (NULL == best_component) {
+        /* No winning component.
+         * Free any components that did successfully initialise */
+        for (item = opal_list_remove_first(&opened);
+             NULL != item;
+             item = opal_list_remove_first(&opened)) {
+            om = (opened_component_t *) item;
+            if (NULL != om->om_component->partm_finalize) {
+                om->om_component->partm_finalize();
+                opal_output_verbose(10, ompi_part_base_framework.framework_output,
+                                    "select: component %s finalized "
+                                    "(no winner selected)",
+                                    om->om_component->partm_version.mca_component_name);
             }
-            ompi_rte_abort(1, "PART %s cannot be selected", tmp_val);
+            OBJ_DESTRUCT(om);
+            free(om);
         }
-        if(0 == i) {
-            ompi_rte_abort(2, "No part component available.  This shouldn't happen.");
-        }
+        OBJ_DESTRUCT(&opened);
+
+        opal_output_verbose(10, ompi_part_base_framework.framework_output,
+                            "select: no part component available; "
+                            "partitioned communication API will return "
+                            "OMPI_ERR_NOT_SUPPORTED");
+        return OMPI_SUCCESS;
     }
 
     opal_output_verbose( 10, ompi_part_base_framework.framework_output,
