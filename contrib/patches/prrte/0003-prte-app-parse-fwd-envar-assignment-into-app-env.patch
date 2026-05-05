@@ -1,0 +1,14 @@
+diff --git a/src/prted/prte_app_parse.c b/src/prted/prte_app_parse.c
+index f3724841fc..a1b2c3d4ef 100644
+--- a/src/prted/prte_app_parse.c
++++ b/src/prted/prte_app_parse.c
+@@ -377,6 +377,11 @@ static int create_app(prte_schizo_base_module_t *schizo, char **argv,
+                 envt.value = strdup(value);
+                 PMIX_INFO_LIST_ADD(rc, app->info, PMIX_SET_ENVAR, &envt, PMIX_ENVAR);
++                /* Also set directly in app->app.env so local processes on the
++                 * submission host see the value. Must come before
++                 * PMIX_ENVAR_DESTRUCT which frees param (envt.envar) and
++                 * envt.value, leaving both as dangling pointers. */
++                PMIX_SETENV_COMPAT(param, value, true, &app->app.env);
+                 PMIX_ENVAR_DESTRUCT(&envt);
+             } else {
