@@ -53,6 +53,33 @@
 # type: bool (0/1)
 %{!?install_in_opt: %define install_in_opt 0}
 
+# Mellanox/HPC-X fork: install OpenMPI under
+# /usr/mpi/gcc/<name>-<version>/ -- the long-standing MLNX_OFED / DOCA
+# packaging convention.  DOCA 3.3.0 (openmpi 4.1.9a1) shipped at
+# /usr/mpi/gcc/openmpi-4.1.9a1/, which kept all bundled libraries in a
+# unique versioned subdir and never collided with system packages.
+#
+# Why the prefix change is required: OMPI 5.x bundles openpmix and
+# prrte and, with the upstream default --prefix=/usr, drops
+# libpmix.so.2 and libprrte.so.3 into /usr/lib64/ plus help texts
+# under /usr/share/{pmix,prte}/.  Those collide with the system pmix
+# and prrte-libs packages on RHEL 10 / ctyunos / SLES (SW#5008199,
+# SW#5010922).  Moving --prefix to /usr/mpi/gcc/openmpi-<ver>/ keeps
+# the bundled libs in a versioned subdir and removes the collision.
+#
+# The Ubuntu 24.04 libevent-dev / evdns.h collision (SW#5009387) is a
+# separate symptom of the same upstream --prefix=/usr default, but it
+# only manifests when libevent is bundled (--with-libevent=internal).
+# With all_external_3rd_party=1 (this spec's default) libevent is
+# never bundled, so SW#5009387 is fixed independently of mofed_prefix.
+#
+# install_in_opt takes priority if also set (=> /opt/<name>/<version>).
+# Set mofed_prefix=0 (and install_in_opt=0) to fall back to the
+# upstream default of --prefix=/usr -- but that path causes the
+# pmix/prrte file collisions described above.
+# type: bool (0/1)
+%{!?mofed_prefix: %define mofed_prefix 1}
+
 # This specfile expects to find all required 3rd party packages
 # (Libevent, Hwloc, PMIx, PRRTE) externally, and will not use the
 # internal/embedded copies of these packages.  This behavior is
@@ -68,8 +95,13 @@
 
 # Define this if you want this RPM to install environment setup
 # shell scripts.
+# Mellanox/HPC-X fork: default flipped from upstream 0 -> 1, because
+# with mofed_prefix=1 (this fork's default) the OMPI binaries live
+# under /usr/mpi/gcc/openmpi-<version>/bin/ which is not on $PATH by
+# default; mpivars.{sh,csh} let users `source` them to set up the
+# environment.  Still overridable via rpmbuild --define.
 # type: bool (0/1)
-%{!?install_shell_scripts: %define install_shell_scripts 0}
+%{!?install_shell_scripts: %define install_shell_scripts 1}
 # type: string (root path to install shell scripts)
 %{!?shell_scripts_path: %define shell_scripts_path %{_bindir}}
 # type: string (base name of the shell scripts)
@@ -190,6 +222,22 @@
 # where they want it to go -- the modulefile is a bit different in
 # that the user may want it outside of /opt).
 %{!?modulefile_path: %define modulefile_path /opt/%{name}/%{version}/share/openmpi/modulefiles}
+%endif
+
+# Mellanox/HPC-X fork: when mofed_prefix=1 (the default in this fork)
+# and install_in_opt is not also set, install everything under
+# /usr/mpi/gcc/<name>-<version>/ (the MLNX_OFED / DOCA convention).
+%if %{mofed_prefix}
+%if !%{install_in_opt}
+%define _prefix /usr/mpi/gcc/%{name}-%{version}
+%define _sysconfdir %{_prefix}/etc
+%define _libdir %{_prefix}/lib
+%define _includedir %{_prefix}/include
+%define _mandir %{_prefix}/share/man
+%define _pkgdatadir %{_prefix}/share/openmpi
+%define _defaultdocdir %{_prefix}/share/doc
+%{!?modulefile_path: %define modulefile_path %{_prefix}/share/openmpi/modulefiles}
+%endif
 %endif
 
 %if %{all_external_3rd_party}
