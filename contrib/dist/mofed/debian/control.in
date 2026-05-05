@@ -3,6 +3,7 @@ Section: net
 Priority: extra
 Homepage: https://www.open-mpi.org/
 Maintainer:  https://www.open-mpi.org
+Build-Depends: debhelper (>= 8), libevent-dev, libhwloc-dev
 
 Package: openmpi
 Depends: ${shlibs:Depends}, ${misc:Depends}, ucx

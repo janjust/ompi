@@ -5,13 +5,41 @@
 DPKG_EXPORT_BUILDFLAGS = 1
 include /usr/share/dpkg/buildflags.mk
 
+# Install everything under /usr/mpi/gcc/openmpi-<upstream-version>/
+# (the MLNX_OFED / DOCA packaging convention -- DOCA 3.3.0 openmpi 4.1.x
+# shipped at /usr/mpi/gcc/openmpi-4.1.9a1/).  Mirrors the openmpi.spec
+# mofed_prefix=1 behaviour on the .deb path.
+#
+# Why the prefix change is required: OMPI 5.x bundles openpmix and prrte
+# and, with the upstream default --prefix=/usr, drops libpmix.so.2 and
+# libprrte.so.3 into /usr/lib64/ plus help texts under /usr/share/{pmix,
+# prte}/.  Those collide with the system pmix / prrte-libs packages on
+# RHEL 10 / ctyunos / SLES (SW#5008199, SW#5010922).  Moving --prefix to
+# /usr/mpi/gcc/openmpi-<ver>/ keeps the bundled libs in a versioned
+# subdir and removes the collision.
+#
+# The Ubuntu 24.04 libevent-dev / evdns.h collision (SW#5009387) is
+# fixed by --with-libevent=external below (no bundled libevent ever
+# ships, regardless of --prefix), and is independent of MOFED_PREFIX.
+PKG_VERSION_UPSTREAM := $(shell dpkg-parsechangelog --show-field Version | sed -e 's/-[^-]*$$//')
+MOFED_PREFIX := /usr/mpi/gcc/openmpi-$(PKG_VERSION_UPSTREAM)
+
 %:
 	dh $@ --parallel
 
 override_dh_auto_clean:
 
 override_dh_auto_configure:
-	dh_auto_configure -- $(CONFIG_ARGS)
+	dh_auto_configure -- \
+		--with-libevent=external --with-hwloc=external \
+		--with-pmix=internal --with-prrte=internal \
+		--prefix=$(MOFED_PREFIX) \
+		--libdir=$(MOFED_PREFIX)/lib \
+		--sysconfdir=$(MOFED_PREFIX)/etc \
+		--includedir=$(MOFED_PREFIX)/include \
+		--datadir=$(MOFED_PREFIX)/share \
+		--mandir=$(MOFED_PREFIX)/share/man \
+		$(CONFIG_ARGS)
 
 override_dh_auto_test:
 
