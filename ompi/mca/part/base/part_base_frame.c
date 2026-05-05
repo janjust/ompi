@@ -60,6 +60,44 @@ int mca_part_base_progress(void)
     return OMPI_SUCCESS;
 }
 
+/*
+ * Default stubs used when no part component is selected 
+ */
+static int mca_part_base_psend_init_unsupported(const void *buf, size_t parts,
+                                                size_t count,
+                                                struct ompi_datatype_t *datatype,
+                                                int dst, int tag,
+                                                struct ompi_communicator_t *comm,
+                                                struct ompi_info_t *info,
+                                                struct ompi_request_t **request)
+{
+    return OMPI_ERR_NOT_SUPPORTED;
+}
+
+static int mca_part_base_precv_init_unsupported(void *buf, size_t parts,
+                                                size_t count,
+                                                struct ompi_datatype_t *datatype,
+                                                int src, int tag,
+                                                struct ompi_communicator_t *comm,
+                                                struct ompi_info_t *info,
+                                                struct ompi_request_t **request)
+{
+    return OMPI_ERR_NOT_SUPPORTED;
+}
+
+static int mca_part_base_pready_unsupported(size_t min_part, size_t max_part,
+                                            struct ompi_request_t *request)
+{
+    return OMPI_ERR_NOT_SUPPORTED;
+}
+
+static int mca_part_base_parrived_unsupported(size_t min_part, size_t max_part,
+                                              int *flag,
+                                              struct ompi_request_t *request)
+{
+    return OMPI_ERR_NOT_SUPPORTED;
+}
+
 #define xstringify(part) #part
 #define stringify(part) xstringify(part)
 
@@ -67,11 +105,15 @@ int mca_part_base_progress(void)
  * Global variables
  */
 mca_part_base_module_t mca_part = {
-    .part_progress = mca_part_base_progress   /* part_progress */
+    .part_progress    = mca_part_base_progress,
+    .part_precv_init  = mca_part_base_precv_init_unsupported,
+    .part_psend_init  = mca_part_base_psend_init_unsupported,
+    .part_start       = NULL,
+    .part_pready      = mca_part_base_pready_unsupported,
+    .part_parrived    = mca_part_base_parrived_unsupported,
 };
 
 mca_part_base_component_t mca_part_base_selected_component = {{0}};
-opal_pointer_array_t mca_part_base_part = {{0}};
 
 static int mca_part_base_register(mca_base_register_flag_t flags)
 {
@@ -88,8 +130,6 @@ int mca_part_base_finalize(void) {
 
 static int mca_part_base_close(void)
 {
-    int i, j;
-
     /* unregister the progress function */
     if( NULL != mca_part.part_progress ) {
         opal_progress_unregister(mca_part.part_progress);
@@ -97,15 +137,6 @@ static int mca_part_base_close(void)
 
     /* reset the progress function to do nothing */
     mca_part.part_progress = mca_part_base_progress;
-
-    /* Free all the strings in the array of components */
-    j = opal_pointer_array_get_size(&mca_part_base_part);
-    for (i = 0; i < j; ++i) {
-        char *str;
-        str = (char*) opal_pointer_array_get_item(&mca_part_base_part, i);
-        free(str);
-    }
-    OBJ_DESTRUCT(&mca_part_base_part);
 
     OBJ_DESTRUCT(&mca_part_base_psend_requests);
     OBJ_DESTRUCT(&mca_part_base_precv_requests);
@@ -120,13 +151,10 @@ static int mca_part_base_close(void)
  */
 static int mca_part_base_open(mca_base_open_flag_t flags)
 {
-    OBJ_CONSTRUCT(&mca_part_base_part, opal_pointer_array_t);
-
-    
     OBJ_CONSTRUCT(&mca_part_base_psend_requests, opal_free_list_t);
     OBJ_CONSTRUCT(&mca_part_base_precv_requests, opal_free_list_t);
-    /* Open up all available components */
 
+    /* Open up all available components */
     if (OPAL_SUCCESS !=
         mca_base_framework_components_open(&ompi_part_base_framework, flags)) {
         return OMPI_ERROR;
@@ -134,11 +162,7 @@ static int mca_part_base_open(mca_base_open_flag_t flags)
 
     /* Set a sentinel in case we don't select any components (e.g.,
        ompi_info) */
-
     mca_part_base_selected_component.partm_finalize = NULL;
-
-    /* Currently this uses a default with no selection criteria as there is only 1 module. */
-    opal_pointer_array_add(&mca_part_base_part, strdup("persist"));
 
     return OMPI_SUCCESS;
 }
