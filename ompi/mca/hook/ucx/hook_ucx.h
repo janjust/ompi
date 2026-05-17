@@ -18,7 +18,7 @@
 
 BEGIN_C_DECLS
 
-OMPI_MODULE_DECLSPEC extern const ompi_hook_base_component_1_0_0_t mca_hook_ucx_component;
+OMPI_DECLSPEC extern const ompi_hook_base_component_1_0_0_t mca_hook_ucx_component;
 
 void ompi_hook_ucx_mpi_init_top_post_opal(int argc, char **argv,
                                           int requested, int *provided);
