@@ -202,6 +202,18 @@ OPAL_DECLSPEC int opal_common_ucx_wpool_init(opal_common_ucx_wpool_t *wpool);
 OPAL_DECLSPEC void opal_common_ucx_wpool_finalize(opal_common_ucx_wpool_t *wpool);
 OPAL_DECLSPEC int opal_common_ucx_wpool_progress(opal_common_ucx_wpool_t *wpool);
 
+/* Global shared worker pool — allows PML and OSC to share a single UCX
+ * context and worker.  Components call opal_common_ucx_add_features() during
+ * their open() phase to declare required UCP features before the context is
+ * created.  opal_common_ucx_global_wpool_get() creates the context+wpool on
+ * the first call and ref-counts subsequent callers.
+ * opal_common_ucx_global_wpool_put() decrements the ref count and destroys
+ * the pool when it reaches zero. */
+OPAL_DECLSPEC void opal_common_ucx_add_features(uint64_t features);
+OPAL_DECLSPEC opal_common_ucx_wpool_t *opal_common_ucx_global_wpool_get(bool enable_mt,
+                                                                         int proc_world_size);
+OPAL_DECLSPEC void opal_common_ucx_global_wpool_put(void);
+
 /* Manage Communication context */
 OPAL_DECLSPEC int opal_common_ucx_wpctx_create(opal_common_ucx_wpool_t *wpool, int comm_size,
                                                opal_common_ucx_exchange_func_t exchange_func,

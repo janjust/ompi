@@ -33,6 +33,10 @@ __thread int initialized = 0;
 
 bool opal_common_ucx_thread_enabled = false;
 bool opal_common_ucx_single_threaded = true;
+
+/* Thread mode used for the default winfo when creating the global shared wpool.
+ * Set to UCS_THREAD_MODE_LAST (sentinel) when not overriding. */
+static ucs_thread_mode_t _dflt_winfo_thread_mode = UCS_THREAD_MODE_LAST;
 opal_atomic_int64_t opal_common_ucx_ep_counts = 0;
 opal_atomic_int64_t opal_common_ucx_unpacked_rkey_counts = 0;
 
@@ -54,9 +58,18 @@ static opal_common_ucx_winfo_t *_winfo_create(opal_common_ucx_wpool_t *wpool)
     opal_common_ucx_winfo_t *winfo = NULL;
 
     if (opal_common_ucx_thread_enabled || wpool->dflt_winfo == NULL) {
+        ucs_thread_mode_t tmode;
+        /* Use the override thread mode when creating the global shared default
+         * worker (e.g. UCS_THREAD_MODE_MULTI when PML needs THREAD_MULTIPLE). */
+        if (UCS_THREAD_MODE_LAST != _dflt_winfo_thread_mode && NULL == wpool->dflt_winfo) {
+            tmode = _dflt_winfo_thread_mode;
+        } else {
+            tmode = opal_common_ucx_single_threaded ?
+                        UCS_THREAD_MODE_SINGLE : UCS_THREAD_MODE_SERIALIZED;
+        }
         memset(&worker_params, 0, sizeof(worker_params));
         worker_params.field_mask = UCP_WORKER_PARAM_FIELD_THREAD_MODE;
-        worker_params.thread_mode = opal_common_ucx_single_threaded ? UCS_THREAD_MODE_SINGLE : UCS_THREAD_MODE_SERIALIZED;
+        worker_params.thread_mode = tmode;
         status = ucp_worker_create(wpool->ucp_ctx, &worker_params, &worker);
         if (UCS_OK != status) {
             MCA_COMMON_UCX_ERROR("ucp_worker_create failed: %d", status);
@@ -1002,4 +1015,122 @@ OPAL_DECLSPEC void opal_common_ucx_req_completion(void *request, ucs_status_t st
         (*req->ext_cb)(req->ext_req);
     }
     ucp_request_release(req);
+}
+
+/* -----------------------------------------------------------------------------
+ * Global shared worker pool — one UCX context and worker shared by all
+ * components (PML, OSC) that register their features before the first
+ * opal_common_ucx_global_wpool_get() call.
+ *----------------------------------------------------------------------------*/
+
+static uint64_t opal_common_ucx_accumulated_features = 0;
+static opal_common_ucx_wpool_t *opal_common_ucx_global_wpool = NULL;
+static opal_mutex_t opal_common_ucx_global_wpool_lock = OPAL_MUTEX_STATIC_INIT;
+
+OPAL_DECLSPEC void opal_common_ucx_add_features(uint64_t features)
+{
+    opal_mutex_lock(&opal_common_ucx_global_wpool_lock);
+    opal_common_ucx_accumulated_features |= features;
+    opal_mutex_unlock(&opal_common_ucx_global_wpool_lock);
+}
+
+OPAL_DECLSPEC opal_common_ucx_wpool_t *
+opal_common_ucx_global_wpool_get(bool enable_mt, int proc_world_size)
+{
+    ucp_params_t context_params;
+    ucp_config_t *config;
+    ucs_status_t status;
+    int rc;
+
+    opal_mutex_lock(&opal_common_ucx_global_wpool_lock);
+
+    if (NULL != opal_common_ucx_global_wpool) {
+        /* Already exists — wpool_init handles refcounting on repeated calls */
+        rc = opal_common_ucx_wpool_init(opal_common_ucx_global_wpool);
+        opal_mutex_unlock(&opal_common_ucx_global_wpool_lock);
+        return (OPAL_SUCCESS == rc) ? opal_common_ucx_global_wpool : NULL;
+    }
+
+    opal_common_ucx_global_wpool = opal_common_ucx_wpool_allocate();
+    if (NULL == opal_common_ucx_global_wpool) {
+        opal_mutex_unlock(&opal_common_ucx_global_wpool_lock);
+        return NULL;
+    }
+
+    status = ucp_config_read("MPI", NULL, &config);
+    if (UCS_OK != status) {
+        MCA_COMMON_UCX_ERROR("ucp_config_read failed: %d", status);
+        goto err_free_wpool;
+    }
+
+    memset(&context_params, 0, sizeof(context_params));
+    context_params.field_mask        = UCP_PARAM_FIELD_FEATURES
+                                     | UCP_PARAM_FIELD_MT_WORKERS_SHARED
+                                     | UCP_PARAM_FIELD_ESTIMATED_NUM_EPS
+                                     | UCP_PARAM_FIELD_REQUEST_INIT
+                                     | UCP_PARAM_FIELD_REQUEST_SIZE;
+    context_params.features          = opal_common_ucx_accumulated_features;
+    context_params.mt_workers_shared = enable_mt ? 1 : 0;
+    context_params.estimated_num_eps = proc_world_size;
+    context_params.request_init      = opal_common_ucx_req_init;
+    context_params.request_size      = sizeof(opal_common_ucx_request_t);
+
+#if HAVE_DECL_UCP_PARAM_FIELD_ESTIMATED_NUM_PPN
+    context_params.estimated_num_ppn  = opal_process_info.num_local_peers + 1;
+    context_params.field_mask        |= UCP_PARAM_FIELD_ESTIMATED_NUM_PPN;
+#endif
+
+#if HAVE_DECL_UCP_PARAM_FIELD_NODE_LOCAL_ID
+    context_params.node_local_id  = opal_process_info.my_local_rank;
+    context_params.field_mask    |= UCP_PARAM_FIELD_NODE_LOCAL_ID;
+#endif
+
+    status = ucp_init(&context_params, config, &opal_common_ucx_global_wpool->ucp_ctx);
+    ucp_config_release(config);
+    if (UCS_OK != status) {
+        MCA_COMMON_UCX_ERROR("ucp_init failed: %d", status);
+        goto err_free_wpool;
+    }
+
+    /* Override default worker thread mode when MPI_THREAD_MULTIPLE is requested.
+     * This is safe here because opal_common_ucx_global_wpool is not yet visible
+     * to other threads (assigned to the global pointer only on success). */
+    if (enable_mt) {
+        _dflt_winfo_thread_mode = UCS_THREAD_MODE_MULTI;
+    }
+    /* wpool_init creates the default worker from wpool->ucp_ctx and sets refcnt = 1 */
+    rc = opal_common_ucx_wpool_init(opal_common_ucx_global_wpool);
+    _dflt_winfo_thread_mode = UCS_THREAD_MODE_LAST; /* reset sentinel */
+    if (OPAL_SUCCESS != rc) {
+        /* wpool_init's error path already called ucp_cleanup */
+        MCA_COMMON_UCX_ERROR("opal_common_ucx_wpool_init failed: %d", rc);
+        goto err_free_wpool;
+    }
+
+    MCA_COMMON_UCX_VERBOSE(1, "created global shared wpool with features 0x%llx",
+                           (unsigned long long) opal_common_ucx_accumulated_features);
+    opal_mutex_unlock(&opal_common_ucx_global_wpool_lock);
+    return opal_common_ucx_global_wpool;
+
+err_free_wpool:
+    opal_common_ucx_wpool_free(opal_common_ucx_global_wpool);
+    opal_common_ucx_global_wpool = NULL;
+    opal_mutex_unlock(&opal_common_ucx_global_wpool_lock);
+    return NULL;
+}
+
+OPAL_DECLSPEC void opal_common_ucx_global_wpool_put(void)
+{
+    opal_mutex_lock(&opal_common_ucx_global_wpool_lock);
+    if (NULL == opal_common_ucx_global_wpool) {
+        opal_mutex_unlock(&opal_common_ucx_global_wpool_lock);
+        return;
+    }
+    /* wpool_finalize decrements refcnt and destroys at zero */
+    opal_common_ucx_wpool_finalize(opal_common_ucx_global_wpool);
+    if (0 == opal_common_ucx_global_wpool->refcnt) {
+        opal_common_ucx_wpool_free(opal_common_ucx_global_wpool);
+        opal_common_ucx_global_wpool = NULL;
+    }
+    opal_mutex_unlock(&opal_common_ucx_global_wpool_lock);
 }

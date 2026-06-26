@@ -19,6 +19,7 @@
 #include "ompi/communicator/communicator.h"
 #include "ompi/request/request.h"
 #include "opal/mca/common/ucx/common_ucx.h"
+#include "opal/mca/common/ucx/common_ucx_wpool.h"
 
 #include <ucp/api/ucp.h>
 #include "pml_ucx_freelist.h"
@@ -39,9 +40,10 @@ typedef struct pml_ucx_convertor            mca_pml_ucx_convertor_t;
 struct mca_pml_ucx_module {
     mca_pml_base_module_t     super;
 
-    /* UCX global objects */
-    ucp_context_h             ucp_context;
-    ucp_worker_h              ucp_worker;
+    /* Shared UCX context and worker, owned by the global common/ucx wpool */
+    opal_common_ucx_wpool_t  *wpool;
+    ucp_context_h             ucp_context; /* cache of wpool->ucp_ctx */
+    ucp_worker_h              ucp_worker;  /* cache of wpool->dflt_winfo->worker */
 
     /* Datatypes */
     int                       datatype_attr_keyval;
@@ -49,6 +51,7 @@ struct mca_pml_ucx_module {
 
     /* Requests */
     mca_pml_ucx_freelist_t    persistent_reqs;
+    mca_pml_ucx_freelist_t    reqs;        /* non-persistent ompi_request_t pool */
     ompi_request_t            completed_send_req;
     size_t                    request_size;
     int                       num_disconnect;

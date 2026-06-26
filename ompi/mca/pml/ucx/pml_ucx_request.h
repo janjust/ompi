@@ -97,6 +97,17 @@ enum {
     }
 
 
+/* Non-persistent PML request: wraps ompi_request_t with a back-pointer to the
+ * in-flight opal_common_ucx_request_t and a detach flag for
+ * MPI_Request_free-before-completion. */
+struct mca_pml_ucx_req {
+    ompi_request_t              ompi;     /* must be first */
+    opal_common_ucx_request_t  *ucx_req; /* NULL when not in flight */
+    bool                        detached; /* MPI_Request_free called while in flight */
+};
+typedef struct mca_pml_ucx_req mca_pml_ucx_req_t;
+OBJ_CLASS_DECLARATION(mca_pml_ucx_req_t);
+
 struct pml_ucx_persistent_request {
     ompi_request_t                    ompi;
     ompi_request_t                    *tmp_req;
@@ -144,10 +155,6 @@ void mca_pml_ucx_persistent_request_complete(mca_pml_ucx_persistent_request_t *p
                                              ompi_request_t *tmp_req);
 
 void mca_pml_ucx_completed_request_init(ompi_request_t *ompi_req);
-
-void mca_pml_ucx_request_init(void *request);
-
-void mca_pml_ucx_request_cleanup(void *request);
 
 int mca_pml_ucx_request_cancel(ompi_request_t *req, int flag);
 #if MPI_VERSION >= 4

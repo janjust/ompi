@@ -89,6 +89,7 @@ mca_pml_ucx_module_t ompi_pml_ucx = {
         .pml_flags          = 0, /* flags */
         .pml_get_transports = mca_pml_ucx_get_transports
     },
+    .wpool                 = NULL,
     .ucp_context           = NULL,
     .ucp_worker            = NULL
 };
@@ -198,10 +199,6 @@ static int mca_pml_ucx_recv_worker_address(ompi_proc_t *proc,
 int mca_pml_ucx_open(void)
 {
     unsigned major_version, minor_version, release_number;
-    ucp_context_attr_t attr;
-    ucp_params_t params;
-    ucp_config_t *config;
-    ucs_status_t status;
 
     /* Check version */
     ucp_get_version(&major_version, &minor_version, &release_number);
@@ -221,59 +218,10 @@ int mca_pml_ucx_open(void)
                      "newer", major_version, minor_version, release_number);
     }
 
-    /* Read options */
-    status = ucp_config_read("MPI", NULL, &config);
-    if (UCS_OK != status) {
-        return OMPI_ERROR;
-    }
-
-    /* Initialize UCX context */
-    params.field_mask        = UCP_PARAM_FIELD_FEATURES |
-                               UCP_PARAM_FIELD_REQUEST_SIZE |
-                               UCP_PARAM_FIELD_REQUEST_INIT |
-                               UCP_PARAM_FIELD_REQUEST_CLEANUP |
-                               UCP_PARAM_FIELD_TAG_SENDER_MASK |
-                               UCP_PARAM_FIELD_MT_WORKERS_SHARED |
-                               UCP_PARAM_FIELD_ESTIMATED_NUM_EPS;
-    params.features          = UCP_FEATURE_TAG;
-    params.request_size      = sizeof(ompi_request_t);
-    params.request_init      = mca_pml_ucx_request_init;
-    params.request_cleanup   = mca_pml_ucx_request_cleanup;
-    params.tag_sender_mask   = PML_UCX_SPECIFIC_SOURCE_MASK;
-    params.mt_workers_shared = 0; /* we do not need mt support for context
-                                     since it will be protected by worker */
-    params.estimated_num_eps = ompi_proc_world_size();
-
-#if HAVE_DECL_UCP_PARAM_FIELD_ESTIMATED_NUM_PPN
-    params.estimated_num_ppn = opal_process_info.num_local_peers + 1;
-    params.field_mask       |= UCP_PARAM_FIELD_ESTIMATED_NUM_PPN;
-#endif
-
-#if HAVE_DECL_UCP_PARAM_FIELD_NODE_LOCAL_ID
-    params.node_local_id = opal_process_info.my_local_rank;
-    params.field_mask   |= UCP_PARAM_FIELD_NODE_LOCAL_ID;
-#endif
-
-    status = ucp_init(&params, config, &ompi_pml_ucx.ucp_context);
-    ucp_config_release(config);
-
-    if (UCS_OK != status) {
-        return OMPI_ERROR;
-    }
-
-    /* Query UCX attributes */
-    attr.field_mask        = UCP_ATTR_FIELD_REQUEST_SIZE;
-#if HAVE_UCP_ATTR_MEMORY_TYPES
-    attr.field_mask       |= UCP_ATTR_FIELD_MEMORY_TYPES;
-#endif
-    status = ucp_context_query(ompi_pml_ucx.ucp_context, &attr);
-    if (UCS_OK != status) {
-        ucp_cleanup(ompi_pml_ucx.ucp_context);
-        ompi_pml_ucx.ucp_context = NULL;
-        return OMPI_ERROR;
-    }
-
-    ompi_pml_ucx.request_size     = attr.request_size;
+    /* Register the UCP features PML requires in the shared UCX context.
+     * The context is created later in mca_pml_ucx_init() once all components
+     * have registered their features via opal_common_ucx_add_features(). */
+    opal_common_ucx_add_features(UCP_FEATURE_TAG);
 
     return OMPI_SUCCESS;
 }
@@ -281,52 +229,52 @@ int mca_pml_ucx_open(void)
 int mca_pml_ucx_close(void)
 {
     PML_UCX_VERBOSE(1, "mca_pml_ucx_close");
-
-    if (ompi_pml_ucx.ucp_context != NULL) {
-        ucp_cleanup(ompi_pml_ucx.ucp_context);
-        ompi_pml_ucx.ucp_context = NULL;
-    }
+    /* UCP context is owned by the global shared wpool; do not clean up here. */
+    ompi_pml_ucx.ucp_context = NULL;
     return OMPI_SUCCESS;
 }
 
 int mca_pml_ucx_init(int enable_mpi_threads)
 {
-    ucp_worker_params_t params;
+    opal_common_ucx_wpool_t *wpool;
     ucp_worker_attr_t attr;
+    ucp_context_attr_t ctx_attr;
     ucs_status_t status;
     int i, rc;
 
     PML_UCX_VERBOSE(1, "mca_pml_ucx_init");
 
-    params.field_mask  = UCP_WORKER_PARAM_FIELD_THREAD_MODE;
-    if (enable_mpi_threads) {
-        params.thread_mode = UCS_THREAD_MODE_MULTI;
-    } else {
-        params.thread_mode =
-            opal_common_ucx_thread_mode(ompi_mpi_thread_provided);
+    /* Obtain (or create) the global shared UCX context + worker pool.
+     * All components have called opal_common_ucx_add_features() in their
+     * open() callbacks, so the accumulated feature set is complete here. */
+    wpool = opal_common_ucx_global_wpool_get(enable_mpi_threads,
+                                             ompi_proc_world_size());
+    if (NULL == wpool) {
+        PML_UCX_ERROR("Failed to get global UCX wpool");
+        return OMPI_ERROR;
     }
+    ompi_pml_ucx.wpool       = wpool;
+    ompi_pml_ucx.ucp_context = wpool->ucp_ctx;
+    ompi_pml_ucx.ucp_worker  = wpool->dflt_winfo->worker;
 
-#if HAVE_DECL_UCP_WORKER_FLAG_IGNORE_REQUEST_LEAK
-    if (!ompi_pml_ucx.request_leak_check) {
-        params.field_mask |= UCP_WORKER_PARAM_FIELD_FLAGS;
-        params.flags      |= UCP_WORKER_FLAG_IGNORE_REQUEST_LEAK;
-    }
-#endif
-
-    status = ucp_worker_create(ompi_pml_ucx.ucp_context, &params,
-                               &ompi_pml_ucx.ucp_worker);
+    /* Query the shared context for the actual request size (UCX internal
+     * overhead + user portion) used by PML_UCX_REQ_ALLOCA(). */
+    ctx_attr.field_mask = UCP_ATTR_FIELD_REQUEST_SIZE;
+    status = ucp_context_query(wpool->ucp_ctx, &ctx_attr);
     if (UCS_OK != status) {
-        PML_UCX_ERROR("Failed to create UCP worker");
+        PML_UCX_ERROR("Failed to query UCP context attributes");
         rc = OMPI_ERROR;
-        goto err;
+        goto err_wpool_put;
     }
+    ompi_pml_ucx.request_size = ctx_attr.request_size;
 
+    /* Verify that the shared worker thread mode satisfies PML requirements. */
     attr.field_mask = UCP_WORKER_ATTR_FIELD_THREAD_MODE;
     status = ucp_worker_query(ompi_pml_ucx.ucp_worker, &attr);
     if (UCS_OK != status) {
         PML_UCX_ERROR("Failed to query UCP worker thread level");
         rc = OMPI_ERROR;
-        goto err_destroy_worker;
+        goto err_wpool_put;
     }
 
     if (enable_mpi_threads && (attr.thread_mode != UCS_THREAD_MODE_MULTI)) {
@@ -335,12 +283,12 @@ int mca_pml_ucx_init(int enable_mpi_threads)
         PML_UCX_WARN("UCP worker does not support MPI_THREAD_MULTIPLE. "
                      "PML UCX could not be selected");
         rc = OMPI_ERR_NOT_SUPPORTED;
-        goto err_destroy_worker;
+        goto err_wpool_put;
     }
 
     rc = mca_pml_ucx_send_worker_address();
     if (rc < 0) {
-        goto err_destroy_worker;
+        goto err_wpool_put;
     }
 
     ompi_pml_ucx.datatype_attr_keyval = MPI_KEYVAL_INVALID;
@@ -350,6 +298,7 @@ int mca_pml_ucx_init(int enable_mpi_threads)
 
     /* Initialize the free lists */
     OBJ_CONSTRUCT(&ompi_pml_ucx.persistent_reqs, mca_pml_ucx_freelist_t);
+    OBJ_CONSTRUCT(&ompi_pml_ucx.reqs,            mca_pml_ucx_freelist_t);
     OBJ_CONSTRUCT(&ompi_pml_ucx.convs,           mca_pml_ucx_freelist_t);
 
     /* Create a completed request to be returned from isend */
@@ -361,15 +310,16 @@ int mca_pml_ucx_init(int enable_mpi_threads)
 
     opal_progress_register(mca_pml_ucx_progress);
 
-    PML_UCX_VERBOSE(2, "created ucp context %p, worker %p",
+    PML_UCX_VERBOSE(2, "using shared ucp context %p, worker %p",
                     (void *)ompi_pml_ucx.ucp_context,
                     (void *)ompi_pml_ucx.ucp_worker);
     return OMPI_SUCCESS;
 
-err_destroy_worker:
-    ucp_worker_destroy(ompi_pml_ucx.ucp_worker);
-err:
-    ompi_pml_ucx.ucp_worker = NULL;
+err_wpool_put:
+    opal_common_ucx_global_wpool_put();
+    ompi_pml_ucx.wpool      = NULL;
+    ompi_pml_ucx.ucp_context = NULL;
+    ompi_pml_ucx.ucp_worker  = NULL;
     return rc;
 }
 
@@ -397,11 +347,16 @@ int mca_pml_ucx_cleanup(void)
     OBJ_DESTRUCT(&ompi_pml_ucx.completed_send_req);
 
     OBJ_DESTRUCT(&ompi_pml_ucx.convs);
+    OBJ_DESTRUCT(&ompi_pml_ucx.reqs);
     OBJ_DESTRUCT(&ompi_pml_ucx.persistent_reqs);
 
-    if (ompi_pml_ucx.ucp_worker != NULL) {
-        ucp_worker_destroy(ompi_pml_ucx.ucp_worker);
-        ompi_pml_ucx.ucp_worker = NULL;
+    /* Worker and context are owned by the global shared wpool; release our
+     * reference instead of destroying them directly. */
+    ompi_pml_ucx.ucp_worker  = NULL;
+    ompi_pml_ucx.ucp_context = NULL;
+    if (NULL != ompi_pml_ucx.wpool) {
+        opal_common_ucx_global_wpool_put();
+        ompi_pml_ucx.wpool = NULL;
     }
 
     return OMPI_SUCCESS;
@@ -583,6 +538,9 @@ int mca_pml_ucx_enable(bool enable)
     PML_UCX_FREELIST_INIT(&ompi_pml_ucx.persistent_reqs,
                           mca_pml_ucx_persistent_request_t,
                           128, -1, 128);
+    PML_UCX_FREELIST_INIT(&ompi_pml_ucx.reqs,
+                          mca_pml_ucx_req_t,
+                          128, -1, 128);
     PML_UCX_FREELIST_INIT(&ompi_pml_ucx.convs,
                           mca_pml_ucx_convertor_t,
                           128, -1, 128);
@@ -633,40 +591,106 @@ int mca_pml_ucx_irecv_init(void *buf, size_t count, ompi_datatype_t *datatype,
     return OMPI_SUCCESS;
 }
 
+/* Helper shared by irecv, imrecv, mrecv, and start (persistent recv).
+ * Posts a UCX receive, links the returned UCX request to a freelist
+ * pml_req, and detects immediate completion via ucp_request_test so that
+ * callers see a consistent req_complete state regardless of when the UCX
+ * completion callback fires relative to the ext_req assignment. */
+static inline int
+mca_pml_ucx_post_recv(opal_common_ucx_request_t *ucx_req,
+                      mca_pml_ucx_req_t *pml_req,
+                      struct ompi_communicator_t *comm)
+{
+    ucp_tag_recv_info_t info;
+    ucs_status_t status;
+
+    if (OPAL_UNLIKELY(UCS_PTR_IS_ERR(ucx_req))) {
+        PML_UCX_ERROR("ucx recv failed: %s",
+                      ucs_status_string(UCS_PTR_STATUS(ucx_req)));
+        PML_UCX_FREELIST_RETURN(&ompi_pml_ucx.reqs, &pml_req->ompi.super);
+        return OMPI_ERROR;
+    }
+
+    PML_UCX_VERBOSE(8, "got pml request %p ucx_req %p",
+                    (void*)pml_req, (void*)ucx_req);
+
+    pml_req->ompi.req_mpi_object.comm = comm;
+    ucx_req->ext_req = pml_req;
+    pml_req->ucx_req = ucx_req;
+
+    /* If the message was already in the unexpected queue, UCX may have called
+     * the completion callback before we linked ext_req (callback checks for
+     * NULL and returns early).  Use ucp_request_test to detect this case and
+     * complete the pml_req manually with the recv info. */
+    status = ucp_request_test(ucx_req, &info);
+    if (UCS_INPROGRESS != status) {
+        if (!REQUEST_COMPLETE(&pml_req->ompi)) {
+            /* Callback fired before ext_req was linked — complete now. */
+            mca_pml_ucx_set_recv_status(&pml_req->ompi.req_status, status, &info);
+            pml_req->ucx_req = NULL;
+            ucp_request_release(ucx_req);
+            ompi_request_complete(&pml_req->ompi, true);
+        }
+        /* else: callback fired after ext_req was linked — already complete. */
+    }
+    return OMPI_SUCCESS;
+}
+
 int mca_pml_ucx_irecv(void *buf, size_t count, ompi_datatype_t *datatype,
                       int src, int tag, struct ompi_communicator_t* comm,
                       struct ompi_request_t **request)
 {
-#if HAVE_DECL_UCP_TAG_RECV_NBX
-    pml_ucx_datatype_t *op_data = mca_pml_ucx_get_op_data(datatype);
-    ucp_request_param_t *param  = &op_data->op_param.irecv;
-#endif
-
+    mca_pml_ucx_req_t *pml_req;
+    opal_common_ucx_request_t *ucx_req;
     ucp_tag_t ucp_tag, ucp_tag_mask;
-    ompi_request_t *req;
+    int rc;
 
     PML_UCX_TRACE_RECV("irecv request *%p", buf, count, datatype, src, tag, comm,
                        (void*)request);
 
+    pml_req = (mca_pml_ucx_req_t *)PML_UCX_FREELIST_GET(&ompi_pml_ucx.reqs);
+    if (OPAL_UNLIKELY(NULL == pml_req)) {
+        return OMPI_ERR_OUT_OF_RESOURCE;
+    }
+    mca_pml_ucx_request_reset(&pml_req->ompi);
+    pml_req->ucx_req  = NULL;
+    pml_req->detached = false;
+
     PML_UCX_MAKE_RECV_TAG(ucp_tag, ucp_tag_mask, tag, src, comm);
 #if HAVE_DECL_UCP_TAG_RECV_NBX
-    req = (ompi_request_t*)ucp_tag_recv_nbx(ompi_pml_ucx.ucp_worker, buf,
-                                            mca_pml_ucx_get_data_size(op_data, count),
-                                            ucp_tag, ucp_tag_mask, param);
-#else
-    req = (ompi_request_t*)ucp_tag_recv_nb(ompi_pml_ucx.ucp_worker, buf, count,
-                                           mca_pml_ucx_get_datatype(datatype),
-                                           ucp_tag, ucp_tag_mask,
-                                           mca_pml_ucx_recv_completion);
-#endif
-    if (UCS_PTR_IS_ERR(req)) {
-        PML_UCX_ERROR("ucx recv failed: %s", ucs_status_string(UCS_PTR_STATUS(req)));
-        return OMPI_ERROR;
+    {
+        pml_ucx_datatype_t *op_data = mca_pml_ucx_get_op_data(datatype);
+        ucp_request_param_t param = op_data->op_param.irecv;
+        param.op_attr_mask |= UCP_OP_ATTR_FIELD_USER_DATA;
+        param.user_data     = pml_req;
+        ucx_req = (opal_common_ucx_request_t *)
+                  ucp_tag_recv_nbx(ompi_pml_ucx.ucp_worker, buf,
+                                   mca_pml_ucx_get_data_size(op_data, count),
+                                   ucp_tag, ucp_tag_mask, &param);
+        if (OPAL_UNLIKELY(UCS_PTR_IS_ERR(ucx_req))) {
+            PML_UCX_ERROR("ucx recv failed: %s",
+                          ucs_status_string(UCS_PTR_STATUS(ucx_req)));
+            PML_UCX_FREELIST_RETURN(&ompi_pml_ucx.reqs, &pml_req->ompi.super);
+            return OMPI_ERROR;
+        }
+        pml_req->ompi.req_mpi_object.comm = comm;
+        pml_req->ucx_req = ucx_req;
+        /* With nbx + user_data, the callback always has the pml_req pointer even
+         * for immediate completions, so no post-call test is needed. */
     }
+#else
+    ucx_req = (opal_common_ucx_request_t *)
+              ucp_tag_recv_nb(ompi_pml_ucx.ucp_worker, buf, count,
+                              mca_pml_ucx_get_datatype(datatype),
+                              ucp_tag, ucp_tag_mask,
+                              mca_pml_ucx_recv_completion);
+    rc = mca_pml_ucx_post_recv(ucx_req, pml_req, comm);
+    if (OPAL_UNLIKELY(OMPI_SUCCESS != rc)) {
+        return rc;
+    }
+#endif
 
-    PML_UCX_VERBOSE(8, "got request %p", (void*)req);
-    req->req_mpi_object.comm = comm;
-    *request                 = req;
+    *request = &pml_req->ompi;
     return OMPI_SUCCESS;
 }
 
@@ -786,7 +810,8 @@ static ucs_status_ptr_t
 mca_pml_ucx_bsend(ucp_ep_h ep, const void *buf, size_t count,
                   ompi_datatype_t *datatype, uint64_t pml_tag)
 {
-    ompi_request_t *req;
+    opal_common_ucx_request_t *ucx_req;
+    mca_pml_ucx_req_t *pml_req;
     void *packed_data;
     size_t packed_length;
     size_t offset;
@@ -823,22 +848,35 @@ mca_pml_ucx_bsend(ucp_ep_h ep, const void *buf, size_t count,
 
     OBJ_DESTRUCT(&opal_conv);
 
-    req = (ompi_request_t*)ucp_tag_send_nb(ep, packed_data, packed_length,
-                                           ucp_dt_make_contig(1), pml_tag,
-                                           mca_pml_ucx_bsend_completion);
-    if (NULL == req) {
-        /* request was completed in place */
+    ucx_req = (opal_common_ucx_request_t *)
+              ucp_tag_send_nb(ep, packed_data, packed_length,
+                              ucp_dt_make_contig(1), pml_tag,
+                              mca_pml_ucx_bsend_completion);
+    if (NULL == ucx_req) {
+        /* Completed immediately — callback freed ucx_req; free packed_data here. */
         mca_pml_base_bsend_request_free(packed_data);
         return NULL;
     }
 
-    if (OPAL_UNLIKELY(UCS_PTR_IS_ERR(req))) {
+    if (OPAL_UNLIKELY(UCS_PTR_IS_ERR(ucx_req))) {
         mca_pml_base_bsend_request_free(packed_data);
-        PML_UCX_ERROR("ucx bsend failed: %s", ucs_status_string(UCS_PTR_STATUS(req)));
+        PML_UCX_ERROR("ucx bsend failed: %s", ucs_status_string(UCS_PTR_STATUS(ucx_req)));
         return UCS_STATUS_PTR(OMPI_ERROR);
     }
 
-    req->req_complete_cb_data = packed_data;
+    /* In-progress: allocate a freelist slot to track packed_data until the
+     * send completes and the completion callback can free it. */
+    pml_req = (mca_pml_ucx_req_t *)PML_UCX_FREELIST_GET(&ompi_pml_ucx.reqs);
+    if (OPAL_UNLIKELY(NULL == pml_req)) {
+        /* Cannot track completion; cancel the send and bail. */
+        ucp_request_cancel(ompi_pml_ucx.ucp_worker, ucx_req);
+        mca_pml_base_bsend_request_free(packed_data);
+        PML_UCX_ERROR("bsend: out of request slots");
+        return UCS_STATUS_PTR(OMPI_ERROR);
+    }
+    pml_req->ompi.req_complete_cb_data = packed_data;
+    pml_req->ucx_req                   = ucx_req;
+    ucx_req->ext_req                   = pml_req;
     return NULL;
 }
 
@@ -891,8 +929,10 @@ int mca_pml_ucx_isend(const void *buf, size_t count, ompi_datatype_t *datatype,
                       struct ompi_communicator_t* comm,
                       struct ompi_request_t **request)
 {
-    ompi_request_t *req;
+    opal_common_ucx_request_t *ucx_req;
+    mca_pml_ucx_req_t *pml_req;
     ucp_ep_h ep;
+    ucp_tag_t pml_tag = PML_UCX_MAKE_SEND_TAG(tag, comm);
 
     PML_UCX_TRACE_SEND("i%ssend request *%p",
                        buf, count, datatype, dst, tag, mode, comm,
@@ -904,40 +944,94 @@ int mca_pml_ucx_isend(const void *buf, size_t count, ompi_datatype_t *datatype,
         return OMPI_ERROR;
     }
 
+    /* Buffered send: mca_pml_ucx_bsend() manages its own freelist entry and
+     * always returns to the caller as if the send completed. */
+    if (OPAL_UNLIKELY(MCA_PML_BASE_SEND_BUFFERED == mode)) {
+        ucx_req = (opal_common_ucx_request_t *)
+                  mca_pml_ucx_bsend(ep, buf, count, datatype, pml_tag);
+        if (OPAL_UNLIKELY(UCS_PTR_IS_ERR(ucx_req))) {
+            return OMPI_ERROR;
+        }
+        *request = &ompi_pml_ucx.completed_send_req;
+        return OMPI_SUCCESS;
+    }
+
+    /* Allocate the ompi_request_t that will be returned to the user. */
+    pml_req = (mca_pml_ucx_req_t *)PML_UCX_FREELIST_GET(&ompi_pml_ucx.reqs);
+    if (OPAL_UNLIKELY(NULL == pml_req)) {
+        return OMPI_ERR_OUT_OF_RESOURCE;
+    }
+    mca_pml_ucx_request_reset(&pml_req->ompi);
+    pml_req->ompi.req_mpi_object.comm = comm;
+    pml_req->ucx_req                  = NULL;
+    pml_req->detached                 = false;
+
 #if HAVE_DECL_UCP_TAG_SEND_NBX
-    req = (ompi_request_t*)mca_pml_ucx_common_send_nbx(ep, buf, count, datatype,
-                                                       PML_UCX_MAKE_SEND_TAG(tag, comm), mode,
-                                                       &mca_pml_ucx_get_op_data(datatype)->op_param.isend);
+    {
+        pml_ucx_datatype_t *op_data = mca_pml_ucx_get_op_data(datatype);
+        if (OPAL_UNLIKELY(MCA_PML_BASE_SEND_SYNCHRONOUS == mode)) {
+            /* ucp_tag_send_sync_nb has no nbx variant; fall back to nb. */
+            ucx_req = (opal_common_ucx_request_t *)
+                      ucp_tag_send_sync_nb(ep, buf, count,
+                                           mca_pml_ucx_get_datatype(datatype),
+                                           pml_tag, mca_pml_ucx_send_completion);
+        } else {
+            ucp_request_param_t param = op_data->op_param.isend;
+            param.op_attr_mask |= UCP_OP_ATTR_FIELD_USER_DATA;
+            param.user_data     = pml_req;
+            ucx_req = (opal_common_ucx_request_t *)
+                      ucp_tag_send_nbx(ep, buf,
+                                       mca_pml_ucx_get_data_size(op_data, count),
+                                       pml_tag, &param);
+        }
+    }
 #else
-    req = (ompi_request_t*)mca_pml_ucx_common_send(ep, buf, count, datatype,
-                                                   mca_pml_ucx_get_datatype(datatype),
-                                                   PML_UCX_MAKE_SEND_TAG(tag, comm), mode,
-                                                   mca_pml_ucx_send_completion);
+    ucx_req = (opal_common_ucx_request_t *)
+              mca_pml_ucx_common_send(ep, buf, count, datatype,
+                                      mca_pml_ucx_get_datatype(datatype),
+                                      pml_tag, mode,
+                                      mca_pml_ucx_send_completion);
 #endif
 
 #if SPC_ENABLE == 1
-    size_t dt_size;
-    ompi_datatype_type_size(datatype, &dt_size);
-    SPC_USER_OR_MPI(tag, dt_size*count,
-                    OMPI_SPC_BYTES_SENT_USER, OMPI_SPC_BYTES_SENT_MPI);
+    {
+        size_t dt_size;
+        ompi_datatype_type_size(datatype, &dt_size);
+        SPC_USER_OR_MPI(tag, dt_size*count,
+                        OMPI_SPC_BYTES_SENT_USER, OMPI_SPC_BYTES_SENT_MPI);
+    }
 #endif
 
-    if (req == NULL) {
-        PML_UCX_VERBOSE(8, "returning completed request");
+    if (NULL == ucx_req) {
+        /* Completed immediately. */
+        PML_UCX_VERBOSE(8, "send completed immediately, returning completed request");
+        PML_UCX_FREELIST_RETURN(&ompi_pml_ucx.reqs, &pml_req->ompi.super);
         *request = &ompi_pml_ucx.completed_send_req;
         return OMPI_SUCCESS;
-    } else if (!UCS_PTR_IS_ERR(req)) {
-        PML_UCX_VERBOSE(8, "got request %p", (void*)req);
-        req->req_mpi_object.comm = comm;
-#if MPI_VERSION >= 4
-        if (OPAL_LIKELY(mca_pml_ucx_request_cancel == req->req_cancel)) {
-            req->req_cancel      = mca_pml_ucx_request_cancel_send;
+    } else if (!UCS_PTR_IS_ERR(ucx_req)) {
+        PML_UCX_VERBOSE(8, "got pml request %p ucx_req %p",
+                        (void*)pml_req, (void*)ucx_req);
+#if !HAVE_DECL_UCP_TAG_SEND_NBX
+        /* For nb path (and sync_nb), link via ext_req. For nbx, user_data
+         * already provides the link. */
+        ucx_req->ext_req = pml_req;
+#elif defined(HAVE_DECL_UCP_TAG_SEND_NBX)
+        /* Sync sends use nb-style ext_req even when nbx is available. */
+        if (OPAL_UNLIKELY(MCA_PML_BASE_SEND_SYNCHRONOUS == mode)) {
+            ucx_req->ext_req = pml_req;
         }
 #endif
-        *request                 = req;
+        pml_req->ucx_req = ucx_req;
+#if MPI_VERSION >= 4
+        if (OPAL_LIKELY(mca_pml_ucx_request_cancel == pml_req->ompi.req_cancel)) {
+            pml_req->ompi.req_cancel = mca_pml_ucx_request_cancel_send;
+        }
+#endif
+        *request = &pml_req->ompi;
         return OMPI_SUCCESS;
     } else {
-        PML_UCX_ERROR("ucx send failed: %s", ucs_status_string(UCS_PTR_STATUS(req)));
+        PML_UCX_FREELIST_RETURN(&ompi_pml_ucx.reqs, &pml_req->ompi.super);
+        PML_UCX_ERROR("ucx send failed: %s", ucs_status_string(UCS_PTR_STATUS(ucx_req)));
         return OMPI_ERROR;
     }
 }
@@ -1139,23 +1233,33 @@ int mca_pml_ucx_imrecv(void *buf, size_t count, ompi_datatype_t *datatype,
                          struct ompi_message_t **message,
                          struct ompi_request_t **request)
 {
-    ompi_request_t *req;
+    mca_pml_ucx_req_t *pml_req;
+    opal_common_ucx_request_t *ucx_req;
+    struct ompi_communicator_t *comm = (*message)->comm;
+    int rc;
 
     PML_UCX_TRACE_MRECV("imrecv", buf, count, datatype, message);
 
-    req = (ompi_request_t*)ucp_tag_msg_recv_nb(ompi_pml_ucx.ucp_worker, buf, count,
-                                               mca_pml_ucx_get_datatype(datatype),
-                                               (*message)->req_ptr,
-                                               mca_pml_ucx_recv_completion);
-    if (UCS_PTR_IS_ERR(req)) {
-        PML_UCX_ERROR("ucx msg recv failed: %s", ucs_status_string(UCS_PTR_STATUS(req)));
-        return OMPI_ERROR;
+    pml_req = (mca_pml_ucx_req_t *)PML_UCX_FREELIST_GET(&ompi_pml_ucx.reqs);
+    if (OPAL_UNLIKELY(NULL == pml_req)) {
+        return OMPI_ERR_OUT_OF_RESOURCE;
+    }
+    mca_pml_ucx_request_reset(&pml_req->ompi);
+    pml_req->ucx_req  = NULL;
+    pml_req->detached = false;
+
+    ucx_req = (opal_common_ucx_request_t *)
+              ucp_tag_msg_recv_nb(ompi_pml_ucx.ucp_worker, buf, count,
+                                  mca_pml_ucx_get_datatype(datatype),
+                                  (*message)->req_ptr,
+                                  mca_pml_ucx_recv_completion);
+    rc = mca_pml_ucx_post_recv(ucx_req, pml_req, comm);
+    if (OPAL_UNLIKELY(OMPI_SUCCESS != rc)) {
+        return rc;
     }
 
-    PML_UCX_VERBOSE(8, "got request %p", (void*)req);
-    req->req_mpi_object.comm = (*message)->comm;
     PML_UCX_MESSAGE_RELEASE(message);
-    *request = req;
+    *request = &pml_req->ompi;
     return OMPI_SUCCESS;
 }
 
@@ -1163,22 +1267,34 @@ int mca_pml_ucx_mrecv(void *buf, size_t count, ompi_datatype_t *datatype,
                         struct ompi_message_t **message,
                         ompi_status_public_t* status)
 {
+    mca_pml_ucx_req_t *pml_req;
+    opal_common_ucx_request_t *ucx_req;
     ompi_request_t *req;
+    struct ompi_communicator_t *comm = (*message)->comm;
+    int rc;
 
     PML_UCX_TRACE_MRECV("mrecv", buf, count, datatype, message);
 
-    req = (ompi_request_t*)ucp_tag_msg_recv_nb(ompi_pml_ucx.ucp_worker, buf, count,
-                                               mca_pml_ucx_get_datatype(datatype),
-                                               (*message)->req_ptr,
-                                               mca_pml_ucx_recv_completion);
-    if (UCS_PTR_IS_ERR(req)) {
-        PML_UCX_ERROR("ucx msg recv failed: %s", ucs_status_string(UCS_PTR_STATUS(req)));
-        return OMPI_ERROR;
+    pml_req = (mca_pml_ucx_req_t *)PML_UCX_FREELIST_GET(&ompi_pml_ucx.reqs);
+    if (OPAL_UNLIKELY(NULL == pml_req)) {
+        return OMPI_ERR_OUT_OF_RESOURCE;
+    }
+    mca_pml_ucx_request_reset(&pml_req->ompi);
+    pml_req->ucx_req  = NULL;
+    pml_req->detached = false;
+
+    ucx_req = (opal_common_ucx_request_t *)
+              ucp_tag_msg_recv_nb(ompi_pml_ucx.ucp_worker, buf, count,
+                                  mca_pml_ucx_get_datatype(datatype),
+                                  (*message)->req_ptr,
+                                  mca_pml_ucx_recv_completion);
+    rc = mca_pml_ucx_post_recv(ucx_req, pml_req, comm);
+    if (OPAL_UNLIKELY(OMPI_SUCCESS != rc)) {
+        return rc;
     }
 
-    req->req_mpi_object.comm = (*message)->comm;
     PML_UCX_MESSAGE_RELEASE(message);
-
+    req = &pml_req->ompi;
     return ompi_request_wait(&req, status);
 }
 
