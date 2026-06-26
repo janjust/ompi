@@ -128,12 +128,15 @@ mca_pml_ucx_component_init(int* priority, bool enable_progress_threads,
     opal_common_ucx_support_level_t support_level;
     int ret;
 
-    support_level = opal_common_ucx_support_level(ompi_pml_ucx.ucp_context);
-    if (support_level == OPAL_COMMON_UCX_SUPPORT_NONE) {
+    /* Create the shared UCX context+worker before querying support level:
+     * ucp_context is NULL until mca_pml_ucx_init() calls global_wpool_get(). */
+    if ( (ret = mca_pml_ucx_init(enable_mpi_threads)) != 0) {
         return NULL;
     }
 
-    if ( (ret = mca_pml_ucx_init(enable_mpi_threads)) != 0) {
+    support_level = opal_common_ucx_support_level(ompi_pml_ucx.ucp_context);
+    if (support_level == OPAL_COMMON_UCX_SUPPORT_NONE) {
+        mca_pml_ucx_cleanup();
         return NULL;
     }
 

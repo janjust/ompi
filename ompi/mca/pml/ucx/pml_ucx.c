@@ -1041,12 +1041,12 @@ mca_pml_ucx_send_nb(ucp_ep_h ep, const void *buf, size_t count,
                     ompi_datatype_t *datatype, ucp_datatype_t ucx_datatype,
                     ucp_tag_t tag, mca_pml_base_send_mode_t mode)
 {
-    ompi_request_t *req;
+    opal_common_ucx_request_t *req;
 
-    req = (ompi_request_t*)mca_pml_ucx_common_send(ep, buf, count, datatype,
-                                                   mca_pml_ucx_get_datatype(datatype),
-                                                   tag, mode,
-                                                   mca_pml_ucx_send_completion_empty);
+    req = (opal_common_ucx_request_t *)mca_pml_ucx_common_send(ep, buf, count, datatype,
+                                                               mca_pml_ucx_get_datatype(datatype),
+                                                               tag, mode,
+                                                               mca_pml_ucx_send_completion_empty);
     if (OPAL_LIKELY(req == NULL)) {
         return OMPI_SUCCESS;
     } else if (!UCS_PTR_IS_ERR(req)) {
@@ -1301,7 +1301,8 @@ int mca_pml_ucx_mrecv(void *buf, size_t count, ompi_datatype_t *datatype,
 int mca_pml_ucx_start(size_t count, ompi_request_t** requests)
 {
     mca_pml_ucx_persistent_request_t *preq;
-    ompi_request_t *tmp_req;
+    mca_pml_ucx_req_t *tmp_req;
+    opal_common_ucx_request_t *ucx_req;
     size_t i;
 
     for (i = 0; i < count; ++i) {
@@ -1316,51 +1317,82 @@ int mca_pml_ucx_start(size_t count, ompi_request_t** requests)
         preq->ompi.req_state = OMPI_REQUEST_ACTIVE;
         mca_pml_ucx_request_reset(&preq->ompi);
 
-        if (preq->flags & MCA_PML_UCX_REQUEST_FLAG_SEND) {
-            tmp_req = (ompi_request_t*)mca_pml_ucx_common_send(preq->send.ep,
-                                                               preq->buffer,
-                                                               preq->count,
-                                                               preq->ompi_datatype,
-                                                               preq->datatype,
-                                                               preq->tag,
-                                                               preq->send.mode,
-                                                               mca_pml_ucx_psend_completion);
-        } else {
-            PML_UCX_VERBOSE(8, "start recv request %p", (void*)preq);
-            tmp_req = (ompi_request_t*)ucp_tag_recv_nb(ompi_pml_ucx.ucp_worker,
-                                                       preq->buffer, preq->count,
-                                                       preq->datatype,
-                                                       preq->tag,
-                                                       preq->recv.tag_mask,
-                                                       mca_pml_ucx_precv_completion);
+        /* Allocate a non-persistent wrapper request to represent the in-flight
+         * UCX operation.  The callback links back to preq via req_complete_cb_data. */
+        tmp_req = (mca_pml_ucx_req_t *)PML_UCX_FREELIST_GET(&ompi_pml_ucx.reqs);
+        if (OPAL_UNLIKELY(NULL == tmp_req)) {
+            return OMPI_ERR_OUT_OF_RESOURCE;
         }
+        mca_pml_ucx_request_reset(&tmp_req->ompi);
+        tmp_req->ucx_req  = NULL;
+        tmp_req->detached = false;
+        tmp_req->ompi.req_complete_cb_data = preq;
 
-        if (tmp_req == NULL) {
-            /* Only send can complete immediately */
-            PML_UCX_ASSERT(preq->flags & MCA_PML_UCX_REQUEST_FLAG_SEND);
-
-            PML_UCX_VERBOSE(8, "send completed immediately, completing persistent request %p",
-                            (void*)preq);
-            mca_pml_ucx_set_send_status(&preq->ompi.req_status, UCS_OK);
-            ompi_request_complete(&preq->ompi, true);
-        } else if (!UCS_PTR_IS_ERR(tmp_req)) {
-            if (REQUEST_COMPLETE(tmp_req)) {
-                /* tmp_req is already completed */
-                PML_UCX_VERBOSE(8, "completing persistent request %p", (void*)preq);
-                mca_pml_ucx_persistent_request_complete(preq, tmp_req);
+        if (preq->flags & MCA_PML_UCX_REQUEST_FLAG_SEND) {
+            ucx_req = (opal_common_ucx_request_t *)
+                mca_pml_ucx_common_send(preq->send.ep,
+                                        preq->buffer, preq->count,
+                                        preq->ompi_datatype, preq->datatype,
+                                        preq->tag, preq->send.mode,
+                                        mca_pml_ucx_psend_completion);
+            if (ucx_req == NULL) {
+                /* Immediate success — no UCX request created */
+                PML_UCX_VERBOSE(8, "send completed immediately, completing persistent "
+                                "request %p", (void*)preq);
+                mca_pml_ucx_request_reset(&tmp_req->ompi);
+                PML_UCX_FREELIST_RETURN(&ompi_pml_ucx.reqs, &tmp_req->ompi.super);
+                mca_pml_ucx_set_send_status(&preq->ompi.req_status, UCS_OK);
+                ompi_request_complete(&preq->ompi, true);
+            } else if (OPAL_UNLIKELY(UCS_PTR_IS_ERR(ucx_req))) {
+                PML_UCX_FREELIST_RETURN(&ompi_pml_ucx.reqs, &tmp_req->ompi.super);
+                PML_UCX_ERROR("ucx send failed: %s",
+                              ucs_status_string(UCS_PTR_STATUS(ucx_req)));
+                return OMPI_ERROR;
             } else {
-                /* tmp_req would be completed by callback and trigger completion
-                 * of preq */
-                PML_UCX_VERBOSE(8, "temporary request %p will complete persistent request %p",
-                                (void*)tmp_req, (void*)preq);
-                tmp_req->req_complete_cb_data = preq;
-                preq->tmp_req                 = tmp_req;
+                PML_UCX_VERBOSE(8, "temporary request %p will complete persistent "
+                                "request %p", (void*)tmp_req, (void*)preq);
+                ucx_req->ext_req  = tmp_req;
+                tmp_req->ucx_req  = ucx_req;
+                preq->tmp_req     = &tmp_req->ompi;
             }
         } else {
-            PML_UCX_ERROR("ucx %s failed: %s",
-                          (preq->flags & MCA_PML_UCX_REQUEST_FLAG_SEND) ? "send" : "recv",
-                          ucs_status_string(UCS_PTR_STATUS(tmp_req)));
-            return OMPI_ERROR;
+            PML_UCX_VERBOSE(8, "start recv request %p", (void*)preq);
+            ucx_req = (opal_common_ucx_request_t *)
+                ucp_tag_recv_nb(ompi_pml_ucx.ucp_worker,
+                                preq->buffer, preq->count,
+                                preq->datatype, preq->tag,
+                                preq->recv.tag_mask,
+                                mca_pml_ucx_precv_completion);
+            if (OPAL_UNLIKELY(UCS_PTR_IS_ERR(ucx_req))) {
+                PML_UCX_FREELIST_RETURN(&ompi_pml_ucx.reqs, &tmp_req->ompi.super);
+                PML_UCX_ERROR("ucx recv failed: %s",
+                              ucs_status_string(UCS_PTR_STATUS(ucx_req)));
+                return OMPI_ERROR;
+            }
+            ucx_req->ext_req = tmp_req;
+            tmp_req->ucx_req = ucx_req;
+            preq->tmp_req    = &tmp_req->ompi;
+
+            /* Detect immediate completion: the recv callback checks ext_req for
+             * NULL and returns early if the message was already in the unexpected
+             * queue when ucp_tag_recv_nb() was called.  Use ucp_request_test to
+             * discover this case and complete preq manually. */
+            {
+                ucp_tag_recv_info_t info;
+                ucs_status_t st = ucp_request_test(ucx_req, &info);
+                if (UCS_INPROGRESS != st && !REQUEST_COMPLETE(&tmp_req->ompi)) {
+                    /* Callback fired with NULL ext_req — complete now. */
+                    PML_UCX_VERBOSE(8, "recv completed immediately, completing "
+                                    "persistent request %p", (void*)preq);
+                    mca_pml_ucx_set_recv_status(&tmp_req->ompi.req_status, st, &info);
+                    tmp_req->ucx_req = NULL;
+                    ucp_request_release(ucx_req);
+                    mca_pml_ucx_persistent_request_complete(preq, &tmp_req->ompi);
+                }
+                /* else: callback already ran after ext_req was linked;
+                 * mca_pml_ucx_preq_completion already completed preq and returned
+                 * tmp_req to the freelist — nothing to do. */
+            }
         }
     }
 
