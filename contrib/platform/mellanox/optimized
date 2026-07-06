@@ -1,7 +1,11 @@
 enable_mca_no_build=btl-uct,coll-han,coll-adapt,part-persist
 enable_mca_dso=coll-cuda,accelerator-cuda,btl-smcuda,btl-uct,rcache-gpusm,rcache-rgpusm,coll-hcoll,coll-ucc,pml-ucx,osc-ucx
 enable_debug_symbols=yes
-enable_mpirun_prefix_by_default=yes
+# mpirun/orterun-prefix-by-default is deprecated in OMPI 5 and intentionally not
+# replaced by enable_prte_prefix_by_default here: platform variables are sourced
+# into the top-level configure and do not reach the PRRTE sub-configure, while
+# leaving the variable unset makes ompi_setup_prrte.m4 pass
+# --enable-prte-prefix-by-default to PRRTE on its own.
 with_devel_headers=yes
 enable_oshmem=yes
 enable_oshmem_fortran=yes
