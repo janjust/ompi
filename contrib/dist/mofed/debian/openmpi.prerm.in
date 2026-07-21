@@ -1,0 +1,22 @@
+#!/bin/sh
+# prerm for the MLNX_OFED / DOCA openmpi .deb.  See openmpi.postinst.in
+# for the rationale behind the update-alternatives entry.
+
+set -e
+
+MOFED_PREFIX="@MOFED_PREFIX@"
+
+case "$1" in
+    remove)
+        if [ -x "$MOFED_PREFIX/bin/mpicc" ]; then
+            update-alternatives --remove mpicc "$MOFED_PREFIX/bin/mpicc"
+        fi
+        ;;
+
+    upgrade|deconfigure|failed-upgrade)
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

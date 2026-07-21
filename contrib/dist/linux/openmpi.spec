@@ -740,6 +740,130 @@ test "x$RPM_BUILD_ROOT" != "x" && rm -rf $RPM_BUILD_ROOT
 
 #############################################################################
 #
+# Post Install / Post Uninstall Section (update-alternatives,
+# all-in-one rpm)
+#
+# All-in-one twin of the update-alternatives hook below (SW#5150809).
+# build_all_in_one_rpm defaults to 1 in this spec, so the single-rpm
+# path is what a default rpmbuild invocation takes -- without this arm
+# the wrappers would stay off $PATH exactly there, and only the
+# sub-package (%post runtime) variant would carry the fix.  Same
+# alternatives group, same priority 50, same defensive guards as that
+# hook and as the .deb postinst.
+#
+# Deliberately a self-contained additive block rather than a merge into
+# the upstream mpi_selector %post above: the fork's delta against the
+# upstream openmpi.spec stays pure-insertion and survives v5.0.x
+# rebases without conflicts.  The !use_mpi_selector guard makes the two
+# %post declarations mutually exclusive by construction (no
+# duplicate-%post rpmbuild error); when mpi_selector is enabled,
+# wrapper exposure is that mechanism's job anyway.
+#############################################################################
+%if !%{use_mpi_selector}
+%if %{build_all_in_one_rpm}
+%if %(test "%{_prefix}" = "/usr" && echo 0 || echo 1)
+%post
+# update-alternatives lives at /usr/sbin/ on RHEL/Rocky (chkconfig), at
+# /usr/bin/ on SUSE; scriptlet PATH is not guaranteed, so resolve and
+# invoke the absolute path.
+UA=/usr/sbin/update-alternatives
+[ -x "$UA" ] || UA=/usr/bin/update-alternatives
+if [ "$1" -ge 1 ] && [ -x "$UA" ] && [ -x %{_prefix}/bin/mpicc ]; then
+    "$UA" \
+        --install /usr/bin/mpicc      mpicc      %{_prefix}/bin/mpicc      50 \
+        --slave   /usr/bin/mpicxx     mpicxx     %{_prefix}/bin/mpicxx        \
+        --slave   /usr/bin/mpic++     mpic++     %{_prefix}/bin/mpic++        \
+        --slave   /usr/bin/mpif77     mpif77     %{_prefix}/bin/mpif77        \
+        --slave   /usr/bin/mpif90     mpif90     %{_prefix}/bin/mpif90        \
+        --slave   /usr/bin/mpifort    mpifort    %{_prefix}/bin/mpifort       \
+        --slave   /usr/bin/mpirun     mpirun     %{_prefix}/bin/mpirun        \
+        --slave   /usr/bin/mpiexec    mpiexec    %{_prefix}/bin/mpiexec       \
+        --slave   /usr/bin/ompi_info  ompi_info  %{_prefix}/bin/ompi_info     \
+        || :
+fi
+exit 0
+
+%postun
+# Drop the alternatives group on final removal only ("$1" -eq 0), same
+# semantics as the %postun runtime variant below and the .deb prerm.
+UA=/usr/sbin/update-alternatives
+[ -x "$UA" ] || UA=/usr/bin/update-alternatives
+if [ "$1" -eq 0 ] && [ -x "$UA" ]; then
+    "$UA" --remove mpicc %{_prefix}/bin/mpicc 2>/dev/null || true
+fi
+exit 0
+%endif
+%endif
+%endif
+
+#############################################################################
+#
+# Post Install / Pre Uninstall Section (update-alternatives)
+#
+# When the OMPI wrappers do not live under /usr/bin/ (i.e. mofed_prefix=1
+# or install_in_opt=1), register them via update-alternatives so that
+# downstream consumers that resolve `mpicc` via $PATH (meson's
+# find_program(), AC_PATH_PROG, plain `mpicc` invocations in CI scripts)
+# keep working without having to source mpivars.sh first.  Mirrors the
+# Debian-side dpkg update-alternatives hook (SW#5030263 reproduces on
+# the Rocky 9.2 bfb the same way it does on the Ubuntu 24.04 / Debian 12
+# bfbs -- this RPM hook is the symmetric fix).
+#
+# Priority 50 matches Debian stock openmpi-bin and the DEB side of this
+# packaging, keeping behaviour predictable when multiple openmpi
+# implementations co-exist.  Only the wrapper binaries are exposed under
+# /usr/bin/; libpmix.so.2 / libprrte.so.3 / bundled libevent stay under
+# the versioned prefix, so SW#5008199 / SW#5009387 / SW#5010922 remain
+# closed.
+#
+# Skip the registration when --prefix=/usr (mofed_prefix=0 +
+# install_in_opt=0), since the wrappers already live in /usr/bin/ and an
+# alternatives entry would point a symlink at itself.  The
+# build_all_in_one_rpm path is covered by the self-contained
+# %post/%postun pair above (SW#5150809), kept separate so the fork's
+# delta against the upstream spec stays pure-insertion.
+#############################################################################
+%if !%{build_all_in_one_rpm}
+%if %(test "%{_prefix}" = "/usr" && echo 0 || echo 1)
+# Defensive guards:
+#   * Two possible binary paths -- update-alternatives ships at
+#     /usr/sbin/update-alternatives on RHEL/Rocky/AlmaLinux (chkconfig
+#     package), at /usr/bin/update-alternatives on SUSE/SLES (the
+#     update-alternatives package), and is missing on some minimal /
+#     UBI / distroless images.  Either path is invoked via PATH so we
+#     don't hardcode one.
+#   * `exit 0` at the end keeps the scriptlet rc=0 even if a slave
+#     entry fails (e.g. mpif77 not shipped in a particular build
+#     config), so RPM does not warn `scriptlet failed` and CI that
+#     reads the rc does not flag the install.
+%post runtime
+if [ "$1" -ge 1 ] && [ -x %{_prefix}/bin/mpicc ]; then
+    if [ -x /usr/sbin/update-alternatives ] || [ -x /usr/bin/update-alternatives ]; then
+        update-alternatives \
+            --install /usr/bin/mpicc      mpicc      %{_prefix}/bin/mpicc      50 \
+            --slave   /usr/bin/mpicxx     mpicxx     %{_prefix}/bin/mpicxx        \
+            --slave   /usr/bin/mpic++     mpic++     %{_prefix}/bin/mpic++        \
+            --slave   /usr/bin/mpif77     mpif77     %{_prefix}/bin/mpif77        \
+            --slave   /usr/bin/mpif90     mpif90     %{_prefix}/bin/mpif90        \
+            --slave   /usr/bin/mpifort    mpifort    %{_prefix}/bin/mpifort       \
+            --slave   /usr/bin/mpirun     mpirun     %{_prefix}/bin/mpirun        \
+            --slave   /usr/bin/mpiexec    mpiexec    %{_prefix}/bin/mpiexec       \
+            --slave   /usr/bin/ompi_info  ompi_info  %{_prefix}/bin/ompi_info     \
+            || :
+    fi
+fi
+exit 0
+
+%postun runtime
+if [ "$1" -eq 0 ] && command -v update-alternatives >/dev/null 2>&1; then
+    update-alternatives --remove mpicc %{_prefix}/bin/mpicc 2>/dev/null || true
+fi
+exit 0
+%endif
+%endif
+
+#############################################################################
+#
 # Files Section
 #
 #############################################################################

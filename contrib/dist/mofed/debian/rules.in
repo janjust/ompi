@@ -43,3 +43,23 @@ override_dh_auto_configure:
 
 override_dh_auto_test:
 
+# Expose the OMPI compiler wrappers and launchers under /usr/bin/ via
+# update-alternatives so consumers that look up `mpicc` on $PATH keep
+# working after the prefix move to /usr/mpi/gcc/openmpi-<ver>/.  See
+# debian/openmpi.postinst.in for the rationale (SW#5030263).
+#
+# The maintainer scripts are templated -- @MOFED_PREFIX@ is substituted
+# with the same value used for --prefix above, so the postinst points at
+# exactly the binaries this build just installed.
+override_dh_installdeb:
+	sed -e 's|@MOFED_PREFIX@|$(MOFED_PREFIX)|g' \
+		debian/openmpi.postinst.in > debian/openmpi.postinst
+	sed -e 's|@MOFED_PREFIX@|$(MOFED_PREFIX)|g' \
+		debian/openmpi.prerm.in > debian/openmpi.prerm
+	chmod 755 debian/openmpi.postinst debian/openmpi.prerm
+	dh_installdeb
+
+override_dh_clean:
+	rm -f debian/openmpi.postinst debian/openmpi.prerm
+	dh_clean
+

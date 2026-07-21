@@ -1,0 +1,54 @@
+#!/bin/sh
+# postinst for the MLNX_OFED / DOCA openmpi .deb.
+#
+# The package installs everything under /usr/mpi/gcc/openmpi-<ver>/
+# (see rules.in MOFED_PREFIX) so that the bundled openpmix/prrte do not
+# collide with the system pmix/prrte-libs packages on RHEL10/SLES/ctyunos
+# (SW#5008199, SW#5010922) and so that the bundled libevent does not
+# collide with libevent-dev on Ubuntu 24.04 (SW#5009387).
+#
+# Side effect of that prefix move: the OMPI compiler wrappers and
+# launchers (mpicc, mpirun, ...) are no longer on $PATH, breaking
+# downstream consumers that resolve them via find_program('mpicc') /
+# AC_PATH_PROG / a plain `mpicc` invocation in CI -- e.g. the bfb
+# time_sync/dpu meson build (SW#5030263).
+#
+# Restore those binaries under /usr/bin/ via update-alternatives so
+# every consumer (current and future) gets them on $PATH without having
+# to know the versioned prefix.  Only the wrapper binaries are exposed
+# this way -- libpmix.so.2 / libprrte.so.3 / bundled libevent stay under
+# the versioned prefix, so SW#5008199 / SW#5009387 / SW#5010922 remain
+# closed.
+#
+# Priority 50 matches the Debian stock openmpi-bin alternative priority,
+# so an admin who installs both packages on the same host keeps a
+# predictable default and can switch via `update-alternatives --config
+# mpi` if needed.
+
+set -e
+
+MOFED_PREFIX="@MOFED_PREFIX@"
+
+case "$1" in
+    configure)
+        if [ -x "$MOFED_PREFIX/bin/mpicc" ]; then
+            update-alternatives \
+                --install /usr/bin/mpicc      mpicc      "$MOFED_PREFIX/bin/mpicc"      50 \
+                --slave   /usr/bin/mpicxx     mpicxx     "$MOFED_PREFIX/bin/mpicxx"        \
+                --slave   /usr/bin/mpic++     mpic++     "$MOFED_PREFIX/bin/mpic++"        \
+                --slave   /usr/bin/mpif77     mpif77     "$MOFED_PREFIX/bin/mpif77"        \
+                --slave   /usr/bin/mpif90     mpif90     "$MOFED_PREFIX/bin/mpif90"        \
+                --slave   /usr/bin/mpifort    mpifort    "$MOFED_PREFIX/bin/mpifort"       \
+                --slave   /usr/bin/mpirun     mpirun     "$MOFED_PREFIX/bin/mpirun"        \
+                --slave   /usr/bin/mpiexec    mpiexec    "$MOFED_PREFIX/bin/mpiexec"       \
+                --slave   /usr/bin/ompi_info  ompi_info  "$MOFED_PREFIX/bin/ompi_info"
+        fi
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0
