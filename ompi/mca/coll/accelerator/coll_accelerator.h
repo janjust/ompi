@@ -52,6 +52,15 @@ mca_coll_accelerator_allreduce(const void *sbuf, void *rbuf, size_t count,
                         struct ompi_communicator_t *comm,
                         mca_coll_base_module_t *module);
 
+int
+mca_coll_accelerator_allreduce_init(const void *sbuf, void *rbuf, size_t count,
+                                    struct ompi_datatype_t *dtype,
+                                    struct ompi_op_t *op,
+                                    struct ompi_communicator_t *comm,
+                                    struct ompi_info_t *info,
+                                    ompi_request_t **request,
+                                    mca_coll_base_module_t *module);
+
 int mca_coll_accelerator_reduce_local(const void *sbuf, void *rbuf, size_t count,
                          struct ompi_datatype_t *dtype,
                          struct ompi_op_t *op,

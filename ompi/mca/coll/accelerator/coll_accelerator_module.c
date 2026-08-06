@@ -100,7 +100,8 @@ mca_coll_accelerator_comm_query(struct ompi_communicator_t *comm,
     accelerator_module->super.coll_module_disable = mca_coll_accelerator_module_disable;
 
     accelerator_module->super.coll_allgather  = mca_coll_accelerator_allgather;
-    accelerator_module->super.coll_allreduce  = mca_coll_accelerator_allreduce;
+    accelerator_module->super.coll_allreduce      = mca_coll_accelerator_allreduce;
+    accelerator_module->super.coll_allreduce_init = mca_coll_accelerator_allreduce_init;
     accelerator_module->super.coll_alltoall   = mca_coll_accelerator_alltoall;
     accelerator_module->super.coll_reduce     = mca_coll_accelerator_reduce;
     accelerator_module->super.coll_bcast      = mca_coll_accelerator_bcast;

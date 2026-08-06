@@ -12,6 +12,7 @@
 #
 
 sources = coll_accelerator_reduce.c coll_accelerator_allreduce.c \
+          coll_accelerator_allreduce_init.c \
           coll_accelerator_reduce_scatter_block.c coll_accelerator_reduce_scatter.c       \
 	  coll_accelerator_allgather.c coll_accelerator_alltoall.c coll_accelerator_bcast.c \
 	  coll_accelerator_component.c coll_accelerator_module.c \
