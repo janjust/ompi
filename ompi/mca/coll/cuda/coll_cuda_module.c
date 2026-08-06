@@ -94,7 +94,8 @@ mca_coll_cuda_comm_query(struct ompi_communicator_t *comm,
 
     cuda_module->super.coll_allgather  = NULL;
     cuda_module->super.coll_allgatherv = NULL;
-    cuda_module->super.coll_allreduce  = mca_coll_cuda_allreduce;
+    cuda_module->super.coll_allreduce      = mca_coll_cuda_allreduce;
+    cuda_module->super.coll_allreduce_init = mca_coll_cuda_allreduce_init;
     cuda_module->super.coll_alltoall   = NULL;
     cuda_module->super.coll_alltoallv  = NULL;
     cuda_module->super.coll_alltoallw  = NULL;
