@@ -1,6 +1,8 @@
 #!/bin/sh
 # prerm for the MLNX_OFED / DOCA openmpi .deb.  See openmpi.postinst.in
-# for the rationale behind the update-alternatives entry.
+# for the rationale behind the update-alternatives entries, and for why
+# the groups are the distro's own "mpi" and "mpirun" rather than a
+# private "mpicc" one (SW#5193513).
 
 set -e
 
@@ -8,8 +10,14 @@ MOFED_PREFIX="@MOFED_PREFIX@"
 
 case "$1" in
     remove)
+        # Deregister only our own alternative from each group.  The
+        # distro's openmpi-bin entry, when present, survives and simply
+        # becomes the selected one again.
+        if [ -x "$MOFED_PREFIX/bin/mpirun" ]; then
+            update-alternatives --remove mpirun "$MOFED_PREFIX/bin/mpirun" || :
+        fi
         if [ -x "$MOFED_PREFIX/bin/mpicc" ]; then
-            update-alternatives --remove mpicc "$MOFED_PREFIX/bin/mpicc"
+            update-alternatives --remove mpi "$MOFED_PREFIX/bin/mpicc" || :
         fi
         ;;
 

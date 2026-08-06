@@ -20,10 +20,44 @@
 # the versioned prefix, so SW#5008199 / SW#5009387 / SW#5010922 remain
 # closed.
 #
-# Priority 50 matches the Debian stock openmpi-bin alternative priority,
-# so an admin who installs both packages on the same host keeps a
-# predictable default and can switch via `update-alternatives --config
-# mpi` if needed.
+# The group layout below is not free-form: update-alternatives is a
+# database shared across packages, not a private symlink helper, so the
+# groups we join must be the ones the distro's own openmpi-bin already
+# defines.  Debian and Ubuntu register two of them:
+#
+#   group "mpirun", master link /usr/bin/mpirun, slave mpiexec
+#   group "mpi",    master link /usr/bin/mpicc,  slaves mpic++ mpicxx
+#                                                mpiCC mpif77 mpif90
+#                                                mpifort
+#
+# Declaring instead a single group named "mpicc" carrying mpirun as a
+# slave breaks that database in both directions (SW#5193513):
+#
+#   * our package first, distro second -- openmpi-bin.postinst aborts
+#     with "alternative mpirun can't be master: it is a slave of mpicc"
+#     and dpkg leaves openmpi-bin, libopenmpi-dev and
+#     libcoarrays-openmpi-dev unconfigured;
+#   * distro first, our package second -- this postinst aborts with
+#     "alternative link /usr/bin/mpicc is already managed by mpi",
+#     taking the whole DOCA-Host install down with it.
+#
+# Joining the distro's groups makes the two implementations ordinary
+# competing alternatives, which is what the mechanism exists for.
+#
+# Priority 60 beats the distro's 50 so our wrappers win by default on a
+# DOCA host.  It must not be 50: an exact tie makes the winner depend on
+# install order rather than on policy.  An admin can still switch with
+# `update-alternatives --config mpi` / `--config mpirun`.
+#
+# ompi_info is deliberately not exposed: openmpi-bin ships
+# /usr/bin/ompi_info as a real file, so dpkg silently overwrites an
+# alternatives symlink placed there and the database is left describing
+# a link it no longer owns.  ompi_info stays under the versioned prefix.
+#
+# Every call is made non-fatal: this script runs under `set -e`, and a
+# postinst that exits non-zero fails the whole DOCA-Host install.  A
+# missing wrapper on $PATH is a degradation; a failed install is an
+# outage.
 
 set -e
 
@@ -31,17 +65,28 @@ MOFED_PREFIX="@MOFED_PREFIX@"
 
 case "$1" in
     configure)
+        # SW#5193513: drop the malformed "mpicc" group shipped in
+        # DOCA 3.5.0-057000 and later.  Nothing else ever removes it, so
+        # without this an already-affected host stays broken across the
+        # upgrade that carries the fix.
+        update-alternatives --remove-all mpicc 2>/dev/null || :
+
+        if [ -x "$MOFED_PREFIX/bin/mpirun" ]; then
+            update-alternatives \
+                --install /usr/bin/mpirun     mpirun   "$MOFED_PREFIX/bin/mpirun"   60 \
+                --slave   /usr/bin/mpiexec    mpiexec  "$MOFED_PREFIX/bin/mpiexec"     \
+                || :
+        fi
+
         if [ -x "$MOFED_PREFIX/bin/mpicc" ]; then
             update-alternatives \
-                --install /usr/bin/mpicc      mpicc      "$MOFED_PREFIX/bin/mpicc"      50 \
-                --slave   /usr/bin/mpicxx     mpicxx     "$MOFED_PREFIX/bin/mpicxx"        \
-                --slave   /usr/bin/mpic++     mpic++     "$MOFED_PREFIX/bin/mpic++"        \
-                --slave   /usr/bin/mpif77     mpif77     "$MOFED_PREFIX/bin/mpif77"        \
-                --slave   /usr/bin/mpif90     mpif90     "$MOFED_PREFIX/bin/mpif90"        \
-                --slave   /usr/bin/mpifort    mpifort    "$MOFED_PREFIX/bin/mpifort"       \
-                --slave   /usr/bin/mpirun     mpirun     "$MOFED_PREFIX/bin/mpirun"        \
-                --slave   /usr/bin/mpiexec    mpiexec    "$MOFED_PREFIX/bin/mpiexec"       \
-                --slave   /usr/bin/ompi_info  ompi_info  "$MOFED_PREFIX/bin/ompi_info"
+                --install /usr/bin/mpicc      mpi      "$MOFED_PREFIX/bin/mpicc"    60 \
+                --slave   /usr/bin/mpic++     mpic++   "$MOFED_PREFIX/bin/mpic++"      \
+                --slave   /usr/bin/mpicxx     mpicxx   "$MOFED_PREFIX/bin/mpicxx"      \
+                --slave   /usr/bin/mpif77     mpif77   "$MOFED_PREFIX/bin/mpif77"      \
+                --slave   /usr/bin/mpif90     mpif90   "$MOFED_PREFIX/bin/mpif90"      \
+                --slave   /usr/bin/mpifort    mpifort  "$MOFED_PREFIX/bin/mpifort"     \
+                || :
         fi
         ;;
 

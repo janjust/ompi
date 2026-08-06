@@ -766,30 +766,53 @@ test "x$RPM_BUILD_ROOT" != "x" && rm -rf $RPM_BUILD_ROOT
 # update-alternatives lives at /usr/sbin/ on RHEL/Rocky (chkconfig), at
 # /usr/bin/ on SUSE; scriptlet PATH is not guaranteed, so resolve and
 # invoke the absolute path.
+#
+# Group layout mirrors the distro's own openmpi packaging -- two groups,
+# "mpirun" (master link /usr/bin/mpirun) and "mpi" (master link
+# /usr/bin/mpicc) -- rather than one private "mpicc" group carrying
+# mpirun as a slave.  update-alternatives is a cross-package database:
+# a name cannot be a group master and another group's slave at the same
+# time, and the private layout deadlocked both install orders against
+# the distro openmpi (SW#5193513).  Priority 60 beats the distro's 50
+# deliberately; 50 would tie and make the winner install-order
+# dependent.  ompi_info is not exposed because the distro package ships
+# it as a real file at that path.
 UA=/usr/sbin/update-alternatives
 [ -x "$UA" ] || UA=/usr/bin/update-alternatives
-if [ "$1" -ge 1 ] && [ -x "$UA" ] && [ -x %{_prefix}/bin/mpicc ]; then
-    "$UA" \
-        --install /usr/bin/mpicc      mpicc      %{_prefix}/bin/mpicc      50 \
-        --slave   /usr/bin/mpicxx     mpicxx     %{_prefix}/bin/mpicxx        \
-        --slave   /usr/bin/mpic++     mpic++     %{_prefix}/bin/mpic++        \
-        --slave   /usr/bin/mpif77     mpif77     %{_prefix}/bin/mpif77        \
-        --slave   /usr/bin/mpif90     mpif90     %{_prefix}/bin/mpif90        \
-        --slave   /usr/bin/mpifort    mpifort    %{_prefix}/bin/mpifort       \
-        --slave   /usr/bin/mpirun     mpirun     %{_prefix}/bin/mpirun        \
-        --slave   /usr/bin/mpiexec    mpiexec    %{_prefix}/bin/mpiexec       \
-        --slave   /usr/bin/ompi_info  ompi_info  %{_prefix}/bin/ompi_info     \
-        || :
+if [ "$1" -ge 1 ] && [ -x "$UA" ]; then
+    # SW#5193513: retire the malformed group shipped in DOCA
+    # 3.5.0-057000 and later, otherwise an affected host stays broken
+    # across the upgrade that carries this fix.
+    "$UA" --remove-all mpicc 2>/dev/null || :
+
+    if [ -x %{_prefix}/bin/mpirun ]; then
+        "$UA" \
+            --install /usr/bin/mpirun     mpirun   %{_prefix}/bin/mpirun   60 \
+            --slave   /usr/bin/mpiexec    mpiexec  %{_prefix}/bin/mpiexec     \
+            || :
+    fi
+
+    if [ -x %{_prefix}/bin/mpicc ]; then
+        "$UA" \
+            --install /usr/bin/mpicc      mpi      %{_prefix}/bin/mpicc    60 \
+            --slave   /usr/bin/mpicxx     mpicxx   %{_prefix}/bin/mpicxx      \
+            --slave   /usr/bin/mpic++     mpic++   %{_prefix}/bin/mpic++      \
+            --slave   /usr/bin/mpif77     mpif77   %{_prefix}/bin/mpif77      \
+            --slave   /usr/bin/mpif90     mpif90   %{_prefix}/bin/mpif90      \
+            --slave   /usr/bin/mpifort    mpifort  %{_prefix}/bin/mpifort     \
+            || :
+    fi
 fi
 exit 0
 
 %postun
-# Drop the alternatives group on final removal only ("$1" -eq 0), same
+# Drop our alternatives on final removal only ("$1" -eq 0), same
 # semantics as the %postun runtime variant below and the .deb prerm.
 UA=/usr/sbin/update-alternatives
 [ -x "$UA" ] || UA=/usr/bin/update-alternatives
 if [ "$1" -eq 0 ] && [ -x "$UA" ]; then
-    "$UA" --remove mpicc %{_prefix}/bin/mpicc 2>/dev/null || true
+    "$UA" --remove mpirun %{_prefix}/bin/mpirun 2>/dev/null || true
+    "$UA" --remove mpi    %{_prefix}/bin/mpicc  2>/dev/null || true
 fi
 exit 0
 %endif
@@ -836,27 +859,39 @@ exit 0
 #     entry fails (e.g. mpif77 not shipped in a particular build
 #     config), so RPM does not warn `scriptlet failed` and CI that
 #     reads the rc does not flag the install.
+#   * The two groups joined here ("mpirun" and "mpi") are the distro's
+#     own; a private "mpicc" group carrying mpirun as a slave breaks
+#     both install orders against the distro openmpi (SW#5193513).
 %post runtime
-if [ "$1" -ge 1 ] && [ -x %{_prefix}/bin/mpicc ]; then
+if [ "$1" -ge 1 ]; then
     if [ -x /usr/sbin/update-alternatives ] || [ -x /usr/bin/update-alternatives ]; then
-        update-alternatives \
-            --install /usr/bin/mpicc      mpicc      %{_prefix}/bin/mpicc      50 \
-            --slave   /usr/bin/mpicxx     mpicxx     %{_prefix}/bin/mpicxx        \
-            --slave   /usr/bin/mpic++     mpic++     %{_prefix}/bin/mpic++        \
-            --slave   /usr/bin/mpif77     mpif77     %{_prefix}/bin/mpif77        \
-            --slave   /usr/bin/mpif90     mpif90     %{_prefix}/bin/mpif90        \
-            --slave   /usr/bin/mpifort    mpifort    %{_prefix}/bin/mpifort       \
-            --slave   /usr/bin/mpirun     mpirun     %{_prefix}/bin/mpirun        \
-            --slave   /usr/bin/mpiexec    mpiexec    %{_prefix}/bin/mpiexec       \
-            --slave   /usr/bin/ompi_info  ompi_info  %{_prefix}/bin/ompi_info     \
-            || :
+        update-alternatives --remove-all mpicc 2>/dev/null || :
+
+        if [ -x %{_prefix}/bin/mpirun ]; then
+            update-alternatives \
+                --install /usr/bin/mpirun     mpirun   %{_prefix}/bin/mpirun   60 \
+                --slave   /usr/bin/mpiexec    mpiexec  %{_prefix}/bin/mpiexec     \
+                || :
+        fi
+
+        if [ -x %{_prefix}/bin/mpicc ]; then
+            update-alternatives \
+                --install /usr/bin/mpicc      mpi      %{_prefix}/bin/mpicc    60 \
+                --slave   /usr/bin/mpicxx     mpicxx   %{_prefix}/bin/mpicxx      \
+                --slave   /usr/bin/mpic++     mpic++   %{_prefix}/bin/mpic++      \
+                --slave   /usr/bin/mpif77     mpif77   %{_prefix}/bin/mpif77      \
+                --slave   /usr/bin/mpif90     mpif90   %{_prefix}/bin/mpif90      \
+                --slave   /usr/bin/mpifort    mpifort  %{_prefix}/bin/mpifort     \
+                || :
+        fi
     fi
 fi
 exit 0
 
 %postun runtime
 if [ "$1" -eq 0 ] && command -v update-alternatives >/dev/null 2>&1; then
-    update-alternatives --remove mpicc %{_prefix}/bin/mpicc 2>/dev/null || true
+    update-alternatives --remove mpirun %{_prefix}/bin/mpirun 2>/dev/null || true
+    update-alternatives --remove mpi    %{_prefix}/bin/mpicc  2>/dev/null || true
 fi
 exit 0
 %endif
