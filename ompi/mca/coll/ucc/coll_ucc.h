@@ -39,7 +39,8 @@ BEGIN_C_DECLS
                          "reduce_scatter,scatterv,scatter," \
                          "ibarrier,ibcast,iallreduce,ialltoall,ialltoallv,iallgather,"\
                          "iallgatherv,ireduce,igather,igatherv,ireduce_scatter_block,"\
-                         "ireduce_scatter,iscatterv,iscatter"
+                         "ireduce_scatter,iscatterv,iscatter," \
+                         "allreduce_init"
 
 typedef struct mca_coll_ucc_req {
     ompi_request_t super;
