@@ -44,6 +44,24 @@
         _coll_req->super.req_mpi_object.comm  = _comm;                  \
     } while(0)
 
+#define COLL_UCC_GET_REQ_PERSISTENT(_coll_req, _comm) do {               \
+        opal_free_list_item_t *item;                                    \
+        item = opal_free_list_wait (&mca_coll_ucc_component.requests);  \
+        if (OPAL_UNLIKELY(NULL == item)) {                              \
+            UCC_ERROR("failed to get mca_coll_ucc_req from free_list"); \
+            goto fallback;                                              \
+        }                                                               \
+        _coll_req = (mca_coll_ucc_req_t *) item;                        \
+        OMPI_REQUEST_INIT(&_coll_req->super, true);                     \
+        _coll_req->super.req_complete_cb      = NULL;                   \
+        _coll_req->super.req_complete_cb_data = NULL;                   \
+        _coll_req->super.req_status.MPI_ERROR = MPI_SUCCESS;            \
+        _coll_req->super.req_free             = mca_coll_ucc_req_free;  \
+        _coll_req->super.req_start            = mca_coll_ucc_req_start; \
+        _coll_req->super.req_type             = OMPI_REQUEST_COLL;      \
+        _coll_req->super.req_mpi_object.comm  = _comm;                  \
+    } while(0)
+
 #define COLL_UCC_REQ_INIT(_coll_req, _req, _coll, _module) do{          \
         if (_coll_req) {                                                \
             _coll.mask   |= UCC_COLL_ARGS_FIELD_CB;                     \

@@ -87,6 +87,8 @@ struct mca_coll_ucc_module_t {
     int                                             array_idx;  /* index in cm->active_modules, -1 if not registered */
     mca_coll_base_module_allreduce_fn_t             previous_allreduce;
     mca_coll_base_module_t*                         previous_allreduce_module;
+    mca_coll_base_module_allreduce_init_fn_t        previous_allreduce_init;
+    mca_coll_base_module_t*                         previous_allreduce_init_module;
     mca_coll_base_module_iallreduce_fn_t            previous_iallreduce;
     mca_coll_base_module_t*                         previous_iallreduce_module;
     mca_coll_base_module_reduce_fn_t                previous_reduce;
@@ -159,6 +161,15 @@ int mca_coll_ucc_iallreduce(const void *sbuf, void *rbuf, int count,
                             struct ompi_communicator_t *comm,
                             ompi_request_t** request,
                             mca_coll_base_module_t *module);
+
+int mca_coll_ucc_allreduce_init(const void *sbuf, void *rbuf, int count,
+                                struct ompi_datatype_t *dtype, struct ompi_op_t *op,
+                                struct ompi_communicator_t *comm,
+                                struct ompi_info_t *info,
+                                ompi_request_t **request,
+                                mca_coll_base_module_t *module);
+
+int mca_coll_ucc_req_start(size_t count, struct ompi_request_t **requests);
 
 int mca_coll_ucc_reduce(const void *sbuf, void* rbuf, int count,
                         struct ompi_datatype_t *dtype, struct ompi_op_t *op,
