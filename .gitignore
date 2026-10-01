@@ -406,6 +406,7 @@ test/simple/mpi_barrier
 test/simple/mpi_no_op
 test/simple/mpi_spin
 test/simple/multi_abort
+test/simple/osc_ucx_bottom_accumulate
 test/simple/parallel_r8
 test/simple/parallel_r64
 test/simple/parallel_w8
@@ -470,6 +471,10 @@ oshmem/shmem/fortran/profile/pmy_pe_f.c
 oshmem/shmem/fortran/profile/pshpalloc_f.c
 oshmem/shmem/fortran/profile/pnum_pes_f.c
 oshmem/shmem/fortran/profile/pstart_pes_f.c
+
+oshmem/test/memheap/layout_large
+oshmem/test/memheap/layout_small
+oshmem/test/memheap/static_anonymous_mapping
 
 oshmem/tools/oshmem_info/oshmem_info
 
