@@ -141,6 +141,46 @@ you can set a specific GID index:
 
 /////////////////////////////////////////////////////////////////////////
 
+.. _faq-ib-locked-memory-label:
+
+How do I set the locked memory limits?
+--------------------------------------
+
+InfiniBand and RoCE use RDMA, which requires communication buffers to
+be locked ("pinned") in physical memory.  The amount of memory a
+process may lock is limited by the ``memlock`` resource limit.  If
+this limit is too low, memory registration can fail and MPI jobs may
+abort or run slowly.  For most HPC installations, the limit should be
+``unlimited``.
+
+The limit is typically set in a file in ``/etc/security/limits.d/``
+(or in ``/etc/security/limits.conf`` on older systems), for example:
+
+.. code-block::
+
+   * soft memlock unlimited
+   * hard memlock unlimited
+
+These files are applied by ``pam_limits`` when a user logs in.  MPI
+processes launched by a resource manager (such as Slurm, PBS/Torque,
+or LSF) are usually not started through a login session; they inherit
+the limits of the resource manager's daemon on each node.  Make sure
+those daemons are started with an unlimited locked memory limit (for
+example, with ``LimitMEMLOCK=infinity`` in the daemon's systemd
+service file), and restart them after changing it.  Some resource
+managers also propagate the limits of the shell that submitted the
+job (for example, Slurm's ``PropagateResourceLimits`` setting), so
+the limit on the submitting node can matter as well.
+
+To see the limit that MPI processes actually get, run ``ulimit -l``
+through the same launch path as your application, for example:
+
+.. code-block::
+
+   shell$ mpirun -n 2 sh -c 'ulimit -l'
+
+/////////////////////////////////////////////////////////////////////////
+
 .. _faq-ib-troubleshoot-label:
 
 I'm experiencing a problem with Open MPI on my InfiniBand / RoCE network; how do I troubleshoot and get help?
@@ -181,8 +221,5 @@ questions in your e-mail:
    If running under C shells, what is the output of the ``limit | grep
    memorylocked`` command?
 
-   .. note:: If the value is not ``unlimited``, .................
-
-   .. error:: TODO Would be good to point to some UCX/vendor docs here
-              about setting memory limits (rather than reproducing this
-              information ourselves).
+   .. note:: If the value is not ``unlimited``, see
+             :ref:`faq-ib-locked-memory-label`.
