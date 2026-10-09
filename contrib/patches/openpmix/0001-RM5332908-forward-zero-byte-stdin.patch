@@ -1,0 +1,64 @@
+From e6fb272094f0ad8efef11ceb703fc5c5f976cf80 Mon Sep 17 00:00:00 2001
+From: Ralph Castain <rhc@pmix.org>
+Date: Sun, 19 Jul 2026 20:18:16 -0700
+Subject: [PATCH] Forward the zero-byte stdin push to the host
+
+When a PMIx server reads its own stdin on behalf of a set of targets, the
+read handler dropped the final zero-byte read instead of passing it to the
+host environment. Reaching EOF on that fd is precisely the event the host
+needs: it is what tells the runtime to close stdin on every target proc.
+Swallowing it leaves each target blocked on a read that will never return,
+so a job such as "prterun -n 1 cat" never completes even though all of the
+input was delivered.
+
+Push the empty byte object to the host before deciding whether to rearm the
+read event. The early return is retained for its original purpose - there is
+nothing left to read once the fd has closed, so the event must not be
+reactivated - but it no longer suppresses the notification. This matches the
+behavior of the tool and launcher path, which already forwards a zero-length
+push, and the host callback contract, which distinguishes an empty push as
+IOF completion.
+
+Signed-off-by: Ralph Castain <rhc@pmix.org>
+---
+ src/common/pmix_iof.c | 16 +++++++++++-----
+ 1 file changed, 11 insertions(+), 5 deletions(-)
+
+diff --git a/src/common/pmix_iof.c b/src/common/pmix_iof.c
+index c4dd537df..d2320b14e 100644
+--- a/src/common/pmix_iof.c
++++ b/src/common/pmix_iof.c
+@@ -2143,19 +2143,25 @@ void pmix_iof_read_local_handler(int sd, short args, void *cbdata)
+             /* nothing we can do with this info - no point in reactivating it */
+             return;
+         }
+-        if (0 == bo.size) {
+-            // our stdin fd has closed - nothing to do, and
+-            // we don't reactivate the event
+-            return;
+-        }
+         PMIX_BYTE_OBJECT_CREATE(boptr, 1);
+         if (0 < bo.size) {
+             boptr->bytes = (char*)malloc(bo.size);
+             memcpy(boptr->bytes, bo.bytes, bo.size);
+             boptr->size = bo.size;
+         }
++        /* push this to the host even when it is empty - a zero-byte push is
++         * how the host learns that our stdin has closed so it can close the
++         * targets' stdin in turn. Dropping it leaves every target waiting on
++         * an EOF that never arrives
++         */
+         rc = pmix_host_server.push_stdin(&pmix_globals.myid, rev->targets, rev->ntargets,
+                                          rev->directives, rev->ndirs, boptr, opcbfn, (void*)boptr);
++        if (0 == bo.size) {
++            /* our stdin fd has closed - there is nothing left to read, so
++             * do not reactivate the event
++             */
++            return;
++        }
+         goto reactivate;
+     }
+ 
+-- 
+2.54.0 (Apple Git-157)
+
